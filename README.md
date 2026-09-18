@@ -7,6 +7,8 @@ the Markdown.
 litgo is written in itself: [litgo.lit.md](litgo.lit.md) is the whole program
 and its documentation. Every other file here is generated from it.
 
+![litgo Gopher logo](logo.jpg)
+
 ## Install
 
 ```sh
