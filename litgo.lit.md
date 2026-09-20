@@ -61,6 +61,72 @@ go 1.24
 /examples/*.go
 ```
 
+<!-- file: .github/workflows/pages.yml -->
+
+This document is also the project's web page. Every push to `master` builds
+litgo from the committed sources, weaves this file to HTML with the binary it
+just built, and publishes the result to GitHub Pages. The tests run first, so a
+push that breaks litgo doesn't replace a page that works. The HTML needs only
+pandoc, because the browser runs mermaid.js and KaTeX for itself. pandoc is
+pinned to a release, since what Ubuntu packages is years older and the page
+should look the way it does when woven at home.
+
+```yaml
+name: pages
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  PANDOC: 3.10.2
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install pandoc
+        run: |
+          curl -fsSL -o pandoc.deb "https://github.com/jgm/pandoc/releases/download/$PANDOC/pandoc-$PANDOC-1-amd64.deb"
+          sudo dpkg -i pandoc.deb
+      - name: Build and test
+        run: |
+          go vet ./...
+          go test ./...
+          go build -o bin/litgo .
+      - name: Weave
+        run: |
+          mkdir _site
+          bin/litgo weave --to html -o _site/index.html litgo.lit.md
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+```
+
 ## The format
 
 A `.lit.md` file is ordinary Markdown. Everything litgo needs goes in HTML

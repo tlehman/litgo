@@ -5,7 +5,8 @@ source, weaves it to a page, and runs it with every compiler error pointing at
 the Markdown.
 
 litgo is written in itself: [litgo.lit.md](litgo.lit.md) is the whole program
-and its documentation. Every other file here is generated from it.
+and its documentation. Every other file here is generated from it. Read it
+woven at <https://tobilehman.com/litgo/>, which every push to `master` rebuilds.
 
 ![litgo Gopher logo](logo.jpg)
 
