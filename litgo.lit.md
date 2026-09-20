@@ -61,144 +61,6 @@ go 1.24
 /examples/*.go
 ```
 
-<!-- file: .github/workflows/pages.yml -->
-
-This document is also the project's web page. Every push to `master` builds
-litgo from the committed sources, weaves this file to HTML with the binary it
-just built, and publishes the result to GitHub Pages. The tests run first, so a
-push that breaks litgo doesn't replace a page that works. The HTML needs only
-pandoc, because the browser runs mermaid.js and KaTeX for itself. pandoc is
-pinned to a release, since what Ubuntu packages is years older and the page
-should look the way it does when woven at home.
-
-```yaml
-name: pages
-
-on:
-  push:
-    branches: [master]
-  workflow_dispatch:
-
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: pages
-  cancel-in-progress: true
-
-env:
-  PANDOC: 3.10.2
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-      - name: Install pandoc
-        run: |
-          curl -fsSL -o pandoc.deb "https://github.com/jgm/pandoc/releases/download/$PANDOC/pandoc-$PANDOC-1-amd64.deb"
-          sudo dpkg -i pandoc.deb
-      - name: Build and test
-        run: |
-          go vet ./...
-          go test ./...
-          go build -o bin/litgo .
-      - name: Weave
-        run: |
-          mkdir _site
-          bin/litgo weave --to html -o _site/index.html litgo.lit.md
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: _site
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
-```
-
-<!-- file: .github/workflows/release.yml -->
-
-Releases follow the `VERSION` constant in the command. Every push to `master`
-reads it, and if no release is tagged `v` plus that version yet, the push
-becomes that release. So publishing a version is changing one string, and a
-push that leaves the string alone publishes nothing. litgo depends on nothing
-but the standard library, which makes cross-compiling a matter of setting two
-variables, and one Linux machine builds for all four targets. The tests run
-first here too.
-
-```yaml
-name: release
-
-on:
-  push:
-    branches: [master]
-  workflow_dispatch:
-
-permissions:
-  contents: write
-
-concurrency:
-  group: release
-
-jobs:
-  release:
-    runs-on: ubuntu-latest
-    env:
-      GH_TOKEN: ${{ github.token }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Is this version released?
-        id: version
-        run: |
-          version=$(sed -n 's/^const VERSION = "\(.*\)"$/\1/p' main.go)
-          test -n "$version"
-          echo "tag=v$version" >> "$GITHUB_OUTPUT"
-          if gh release view "v$version" > /dev/null 2>&1; then
-            echo "v$version is already released"
-          else
-            echo "new=true" >> "$GITHUB_OUTPUT"
-          fi
-      - uses: actions/setup-go@v5
-        if: steps.version.outputs.new
-        with:
-          go-version-file: go.mod
-      - name: Test
-        if: steps.version.outputs.new
-        run: |
-          go vet ./...
-          go test ./...
-      - name: Build
-        if: steps.version.outputs.new
-        run: |
-          tag=${{ steps.version.outputs.tag }}
-          mkdir dist
-          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
-            os=${target%/*} arch=${target#*/}
-            dir=litgo_${tag#v}_${os}_${arch}
-            mkdir "$dir"
-            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w" -o "$dir/litgo" .
-            cp LICENSE README.md "$dir"
-            tar -czf "dist/$dir.tar.gz" "$dir"
-          done
-          (cd dist && sha256sum *.tar.gz > checksums.txt)
-      - name: Publish
-        if: steps.version.outputs.new
-        run: |
-          gh release create ${{ steps.version.outputs.tag }} dist/* \
-            --target "$GITHUB_SHA" --title ${{ steps.version.outputs.tag }} --generate-notes
-```
-
 ## The format
 
 A `.lit.md` file is ordinary Markdown. Everything litgo needs goes in HTML
@@ -6499,7 +6361,7 @@ Editor protocol (document on stdin, JSON on stdout):
 Positions in the editor protocol are 0-based; columns are bytes.
 `
 
-const VERSION = "0.1.5"
+const VERSION = "0.1.6"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -11405,3 +11267,148 @@ for r := range results {
 fmt.Printf("%d of %d jobs finished\n", done, m)
 ```
 ````
+
+
+# Publishing
+
+The last two files aren't part of litgo. They are what GitHub does with it
+after a push: one publishes this document as a web page, the other publishes
+the binaries.
+
+<!-- file: .github/workflows/pages.yml -->
+
+This document is also the project's web page. Every push to `master` builds
+litgo from the committed sources, weaves this file to HTML with the binary it
+just built, and publishes the result to GitHub Pages. The tests run first, so a
+push that breaks litgo doesn't replace a page that works. The HTML needs only
+pandoc, because the browser runs mermaid.js and KaTeX for itself. pandoc is
+pinned to a release, since what Ubuntu packages is years older and the page
+should look the way it does when woven at home.
+
+```yaml
+name: pages
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  PANDOC: 3.10.2
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install pandoc
+        run: |
+          curl -fsSL -o pandoc.deb "https://github.com/jgm/pandoc/releases/download/$PANDOC/pandoc-$PANDOC-1-amd64.deb"
+          sudo dpkg -i pandoc.deb
+      - name: Build and test
+        run: |
+          go vet ./...
+          go test ./...
+          go build -o bin/litgo .
+      - name: Weave
+        run: |
+          mkdir _site
+          bin/litgo weave --to html -o _site/index.html litgo.lit.md
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+```
+
+<!-- file: .github/workflows/release.yml -->
+
+Releases follow the `VERSION` constant in the command. Every push to `master`
+reads it, and if no release is tagged `v` plus that version yet, the push
+becomes that release. So publishing a version is changing one string, and a
+push that leaves the string alone publishes nothing. litgo depends on nothing
+but the standard library, which makes cross-compiling a matter of setting two
+variables, and one Linux machine builds for all four targets. The tests run
+first here too.
+
+```yaml
+name: release
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Is this version released?
+        id: version
+        run: |
+          version=$(sed -n 's/^const VERSION = "\(.*\)"$/\1/p' main.go)
+          test -n "$version"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          if gh release view "v$version" > /dev/null 2>&1; then
+            echo "v$version is already released"
+          else
+            echo "new=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-go@v5
+        if: steps.version.outputs.new
+        with:
+          go-version-file: go.mod
+      - name: Test
+        if: steps.version.outputs.new
+        run: |
+          go vet ./...
+          go test ./...
+      - name: Build
+        if: steps.version.outputs.new
+        run: |
+          tag=${{ steps.version.outputs.tag }}
+          mkdir dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            os=${target%/*} arch=${target#*/}
+            dir=litgo_${tag#v}_${os}_${arch}
+            mkdir "$dir"
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w" -o "$dir/litgo" .
+            cp LICENSE README.md "$dir"
+            tar -czf "dist/$dir.tar.gz" "$dir"
+          done
+          (cd dist && sha256sum *.tar.gz > checksums.txt)
+      - name: Publish
+        if: steps.version.outputs.new
+        run: |
+          gh release create ${{ steps.version.outputs.tag }} dist/* \
+            --target "$GITHUB_SHA" --title ${{ steps.version.outputs.tag }} --generate-notes
+```
