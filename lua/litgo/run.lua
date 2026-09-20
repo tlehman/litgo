@@ -71,6 +71,20 @@ local function panel_win()
   return win
 end
 
+--- Put the cursor in the panel, if it is on screen.
+local function panel_focus()
+  local buf = panel.buf
+  if not (buf and vim.api.nvim_buf_is_valid(buf)) then
+    return
+  end
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_get_buf(win) == buf then
+      vim.api.nvim_set_current_win(win)
+      return
+    end
+  end
+end
+
 local function panel_clear()
   local buf = panel_buf()
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, {})
@@ -132,7 +146,7 @@ function M.clear(buf)
   end
 end
 
---- Keep run diagnostics honest while editing: fixing a line dismisses its
+--- Keep run diagnostics accurate while editing: fixing a line dismisses its
 --- error, and errors below an edit move with their text.
 function M.attach(buf)
   vim.diagnostic.config({
@@ -323,6 +337,7 @@ function M.run(buf, args)
       end
       job = nil
       publish(diags, buf)
+      local jumped = false
       if cfg.jump and vim.api.nvim_get_current_buf() == buf then
         local name = vim.api.nvim_buf_get_name(buf)
         for _, d in ipairs(diags) do
@@ -330,9 +345,13 @@ function M.run(buf, args)
             local row = math.min(d.line + 1, vim.api.nvim_buf_line_count(buf))
             vim.api.nvim_win_set_cursor(0, { row, d.col })
             vim.cmd("normal! zv")
+            jumped = true
             break
           end
         end
+      end
+      if cfg.focus and not jumped and vim.api.nvim_get_current_buf() == buf then
+        panel_focus()
       end
     end)
   end)

@@ -33,6 +33,7 @@ var typstTarget = target{
 		rawTypst("#lit-literal.update(false)"),
 	},
 	diagrams:  true,
+	figure:    func(svg string) string { return rawTypst("#lit-figure(" + typstString(svg) + ")") },
 	dropTitle: true,
 }
 
@@ -41,7 +42,9 @@ var preamble string
 
 // Typst returns the document as Typst markup.
 func Typst(d *lit.Doc) (string, error) {
-	body, err := pandoc(weave(d, typstTarget), "--to", "typst")
+	t := typstTarget
+	t.figures = drawn(d)
+	body, err := pandoc(weave(d, t), "--to", "typst")
 	if err != nil {
 		return "", err
 	}

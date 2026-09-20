@@ -157,6 +157,21 @@ check(panel_text():find("jobs finished") ~= nil, "program output reaches the pan
 check(panel_text():find("✓ built") ~= nil, "the build is reported")
 check(#vim.diagnostic.get(buf, { namespace = run.ns }) == 0, "a clean run leaves no diagnostics")
 
+-- The panel has the cursor when the run is over, and q gives it back.
+local function panel_win()
+  local pb = vim.fn.bufnr("litgo://output")
+  for _, w in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_get_buf(w) == pb then
+      return w
+    end
+  end
+end
+wait(10000, function() return vim.api.nvim_get_current_win() == panel_win() end, "the panel to take the cursor")
+check(vim.api.nvim_get_current_win() == panel_win(), "the output panel takes the cursor when the run ends")
+vim.api.nvim_feedkeys("q", "x", false)
+check(panel_win() == nil, "q closes it")
+check(vim.api.nvim_get_current_buf() == buf, "and the cursor is back in the document")
+
 -- Errors as you type: the language server, nothing run -------------------------
 local function diag(pattern, ns)
   for _, x in ipairs(vim.diagnostic.get(buf, { namespace = ns })) do
@@ -166,6 +181,13 @@ local function diag(pattern, ns)
   end
 end
 check(require("litgo.lsp").active(buf), "the language server is attached")
+
+-- What a completion plugin needs to keep Markdown snippets out of Go blocks.
+local blocks = require("litgo")
+check(blocks.in_go_block(buf, find(buf, "fmt.Println(r)") - 1), "a line of Go is in a Go block")
+check(not blocks.in_go_block(buf, find(buf, "# Worker pool") - 1), "a heading is not")
+check(not blocks.in_go_block(buf, find(buf, "flowchart LR") - 1), "and neither is a diagram")
+
 local l3 = find(buf, "fmt.Println(r)")
 vim.api.nvim_buf_set_lines(buf, l3 - 1, l3, false, { "\tfmt.Println(rr)" })
 wait(60000, function() return diag("undefined: rr") ~= nil end, "the language server to find the type error")
@@ -179,6 +201,7 @@ vim.api.nvim_win_set_cursor(0, { 1, 0 })
 vim.cmd("TangleCompileAndRun")
 wait(60000, function() return panel_text():find("build failed") ~= nil end, "the build to fail")
 wait(2000, function() return #vim.fn.getqflist() == 2 end, "the quickfix list")
+check(vim.api.nvim_get_current_win() ~= panel_win(), "a run that fails leaves the cursor in the document")
 check(first and vim.api.nvim_win_get_cursor(0)[1] == first.lnum + 1, "the cursor jumped to the first error")
 check(#vim.fn.getqflist() == 2, "the quickfix list mirrors the compiler")
 check(diag("undefined: rr", run.ns) == nil, "the run does not repeat what the server reports")
@@ -187,7 +210,7 @@ vim.api.nvim_buf_set_lines(buf, l3 - 1, l3, false, { "\tfmt.Println(r)" })
 wait(20000, function() return diag("undefined: rr") == nil and diag("declared and not used") == nil end, "the errors to clear")
 check(#vim.diagnostic.get(buf) == 0, "fixing the line clears the errors")
 
--- Diagnostics from a run (a panic, a failing test) stay honest between runs.
+-- Diagnostics from a run (a panic, a failing test) stay accurate between runs.
 vim.diagnostic.set(run.ns, buf, {
   { lnum = l3 - 1, col = 0, message = "panic: one", severity = 1 },
   { lnum = l3 + 1, col = 0, message = "panic: two", severity = 1 },

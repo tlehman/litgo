@@ -39,7 +39,7 @@ Editor protocol (document on stdin, JSON on stdout):
 Positions in the editor protocol are 0-based; columns are bytes.
 `
 
-const VERSION = "0.1.3"
+const VERSION = "0.1.4"
 
 func main() {
 	if len(os.Args) < 2 {

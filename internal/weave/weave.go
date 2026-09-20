@@ -32,7 +32,9 @@ type target struct {
 	file      func(path string) string
 	meta      func(text string) string // goes under the title; nil leaves it out
 	literal   [2]string                // put around blocks whose references are only text
-	diagrams  bool                     // draw Mermaid as text: the format cannot run mermaid.js
+	diagrams  bool                     // draw Mermaid here: the format cannot run mermaid.js
+	figure    func(svg string) string  // places a diagram that mermaid.js drew
+	figures   map[int]string           // those drawings, by the line their block opens on
 	dropTitle bool                     // the format sets the title itself
 }
 
@@ -74,12 +76,15 @@ func weave(d *lit.Doc, t target) string {
 			if b.Lang != "mermaid" || b.Strip > 0 {
 				continue
 			}
+			if svg, ok := t.figures[b.Open]; ok {
+				replace[b.Open], until[b.Open] = t.figure(svg), b.Close
+				continue
+			}
 			lines, err := mermaid.Render(strings.Join(d.Lines[b.First():b.Last()+1], "\n"))
 			if err != nil {
 				continue
 			}
-			replace[b.Open] = "```diagram\n" + strings.Join(lines, "\n") + "\n```\n"
-			until[b.Open] = b.Close
+			replace[b.Open], until[b.Open] = "```diagram\n"+strings.Join(lines, "\n")+"\n```\n", b.Close
 		}
 	}
 	if t.literal[0] != "" {
@@ -123,6 +128,72 @@ func weave(d *lit.Doc, t target) string {
 		sb.WriteString(after[i])
 	}
 	return sb.String()
+}
+
+// drawn returns the SVG of each Mermaid block that mermaid-cli could draw,
+// by the line the block opens on.
+func drawn(d *lit.Doc) map[int]string {
+	var at []int
+	var srcs []string
+	for _, b := range d.Blocks {
+		if b.Lang == "mermaid" && b.Strip == 0 {
+			at = append(at, b.Open)
+			srcs = append(srcs, strings.Join(d.Lines[b.First():b.Last()+1], "\n"))
+		}
+	}
+	if len(srcs) == 0 {
+		return nil
+	}
+	bin, err := exec.LookPath("mmdc")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "litgo: mmdc is not installed (npm install -g @mermaid-js/mermaid-cli), so diagrams are drawn as text")
+		return nil
+	}
+	svgs := mmdc(bin, srcs)
+	if svgs == nil && len(srcs) > 1 {
+		svgs = make([]string, len(srcs))
+		for i, src := range srcs {
+			if one := mmdc(bin, []string{src}); one != nil {
+				svgs[i] = one[0]
+			}
+		}
+	}
+	figures := map[int]string{}
+	for i, svg := range svgs {
+		if svg != "" {
+			figures[at[i]] = svg
+		}
+	}
+	return figures
+}
+
+// mmdc draws every diagram in one run of mermaid-cli, or returns nil.
+func mmdc(bin string, srcs []string) []string {
+	dir, err := os.MkdirTemp("", "litgo-mermaid")
+	if err != nil {
+		return nil
+	}
+	defer os.RemoveAll(dir)
+	var md strings.Builder
+	for _, src := range srcs {
+		md.WriteString("```mermaid\n" + src + "\n```\n\n")
+	}
+	os.WriteFile(filepath.Join(dir, "in.md"), []byte(md.String()), 0o644)
+	os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"htmlLabels": false, "flowchart": {"htmlLabels": false}}`), 0o644)
+	cmd := exec.Command(bin, "-i", "in.md", "-o", "out.svg", "-c", "config.json", "-b", "transparent", "-q")
+	cmd.Dir = dir
+	if err := cmd.Run(); err != nil {
+		return nil
+	}
+	svgs := make([]string, len(srcs))
+	for i := range srcs {
+		svg, err := os.ReadFile(filepath.Join(dir, fmt.Sprintf("out-%d.svg", i+1)))
+		if err != nil {
+			return nil
+		}
+		svgs[i] = string(svg)
+	}
+	return svgs
 }
 
 // titleLine is the line of the first top-level heading, or -1.

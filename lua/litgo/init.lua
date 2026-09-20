@@ -24,6 +24,7 @@ M.config = {
     vet = false, -- also report `go vet` findings as warnings
     timeout = "60s", -- kill runaway programs; "" to disable
     jump = true, -- move the cursor to the first error
+    focus = true, -- put the cursor in the output panel when the run ends, so q closes it
     on_save = false, -- :TangleCompileAndRun after every write (toggle with :LitWatch)
     panel_height = 12,
   },
@@ -32,8 +33,8 @@ M.config = {
     virtual_lines = true, -- show them under the offending line rather than beside it
     gopls = true, -- completion, hover, definitions, references, rename in Go blocks; or a path, or false
     settings = nil, -- gopls settings, e.g. { buildFlags = { "-tags=integration" } }
-    completion = false, -- true: Neovim's own completion popup as you type. Leave it off with
-    -- nvim-cmp or blink.cmp, which find the server by themselves.
+    completion = "auto", -- "auto": Neovim's own completion popup as you type, unless a
+    -- completion plugin is loaded. true forces it on, false off.
   },
   weave = { open = true },
   untangle = { jump = false }, -- true: go to the new chunk to document it right away
@@ -126,6 +127,27 @@ local function define_highlights()
   for name, target in pairs(links) do
     vim.api.nvim_set_hl(0, name, { link = target, default = true })
   end
+end
+
+--- Is a line (0-based; the cursor's by default) inside a Go block?
+function M.in_go_block(buf, line)
+  buf = buf or 0
+  if not M.is_lit(buf) then
+    return false
+  end
+  line = line or (vim.api.nvim_win_get_cursor(0)[1] - 1)
+  local lang, fence = nil, nil
+  for _, l in ipairs(vim.api.nvim_buf_get_lines(buf, 0, line, false)) do
+    local marks, rest = l:match("^%s*(``+`)%s*(.*)$")
+    if marks then
+      if not fence then
+        fence, lang = marks, rest:match("^[%w_+-]*")
+      elseif #marks >= #fence then
+        fence, lang = nil, nil
+      end
+    end
+  end
+  return lang == "go"
 end
 
 --- Set up one .lit.md buffer: commands, keymaps, rendering.

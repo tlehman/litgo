@@ -32,6 +32,14 @@
   }
 }
 
+#let lit-figure(svg) = layout(page => {
+  let data = bytes(svg)
+  let natural = measure(image(data, format: "svg"))
+  let scale = calc.min(0.62, page.width / natural.width, 0.8 * page.height / natural.height)
+  align(center, block(breakable: false, above: 1.4em, below: 1.4em,
+    image(data, format: "svg", width: scale * natural.width)))
+})
+
 #let lit-literal = state("lit-literal", false)
 #let lit-reference = regex("<<\\s*([^<>]+?)\\s*>>")
 #let lit-slug(name) = "chunk-" + lower(name).replace(regex("[^a-z0-9]+"), "-").trim("-")

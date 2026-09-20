@@ -493,9 +493,10 @@ func (d *Doc) apply(dir *Directive, cur *File) {
 
 ## Files, blocks and chunks
 
+OutPath is where a file is written. The default file is named after 
+the document: name.lit.md tangles to name.go.
+
 ```go
-// OutPath is where a file is written. The default file is named after the
-// document: name.lit.md tangles to name.go.
 func (d *Doc) OutPath(f *File) string {
 	dir := filepath.Dir(d.Path)
 	if f.Path != "" {
@@ -1140,12 +1141,9 @@ type UntangleResult struct {
 }
 ```
 
-**Untangle** is what makes chunks cheap. You select some code, and it becomes a
-named chunk at the bottom of the document, with a reference left in its place.
-If you select whole lines, the reference is a line comment. If you select part
-of a line, the reference is a block comment, and that is how you lift an
-argument list or a condition out of a long expression. Tangling the result
-gives the same program byte for byte, and the tests check that.
+**Untangle** creates a named chunk from a highlighted region. You should use it 
+whenever you are looking at a large block of code and think "this part should be collapsed
+and moved to it's own part of the document".
 
 ```go
 // Untangle moves the selection into a new named chunk at the bottom of the
@@ -5432,7 +5430,9 @@ type target struct {
 	file      func(path string) string
 	meta      func(text string) string // goes under the title; nil leaves it out
 	literal   [2]string                // put around blocks whose references are only text
-	diagrams  bool                     // draw Mermaid as text: the format cannot run mermaid.js
+	diagrams  bool                     // draw Mermaid here: the format cannot run mermaid.js
+	figure    func(svg string) string  // places a diagram that mermaid.js drew
+	figures   map[int]string           // those drawings, by the line their block opens on
 	dropTitle bool                     // the format sets the title itself
 }
 ```
@@ -5502,9 +5502,11 @@ for _, b := range d.Blocks {
 }
 ```
 
-A web page can load mermaid.js but a PDF can't. litgo already knows how to draw
-a diagram with box characters though, and in a monospaced font that makes a
-perfectly good figure. If litgo can't draw a diagram, it stays as source.
+A web page can load mermaid.js but a PDF can't, so the diagrams have to be
+drawn before Typst sees them. If mermaid.js has drawn a block, its SVG goes in
+as a figure. Otherwise litgo already knows how to draw a diagram with box
+characters, and in a monospaced font that still makes a decent figure. If litgo
+can't draw a diagram either, it stays as source.
 
 <!-- chunk: draw the diagrams if the format cannot -->
 ```go
@@ -5513,13 +5515,95 @@ if t.diagrams {
 		if b.Lang != "mermaid" || b.Strip > 0 {
 			continue
 		}
+		if svg, ok := t.figures[b.Open]; ok {
+			replace[b.Open], until[b.Open] = t.figure(svg), b.Close
+			continue
+		}
 		lines, err := mermaid.Render(strings.Join(d.Lines[b.First():b.Last()+1], "\n"))
 		if err != nil {
 			continue
 		}
-		replace[b.Open] = "```diagram\n" + strings.Join(lines, "\n") + "\n```\n"
-		until[b.Open] = b.Close
+		replace[b.Open], until[b.Open] = "```diagram\n"+strings.Join(lines, "\n")+"\n```\n", b.Close
 	}
+}
+```
+
+The drawing is done by [mermaid-cli](https://github.com/mermaid-js/mermaid-cli),
+which runs mermaid.js in a headless browser. Starting a browser is slow, so all
+the diagrams go to `mmdc` at once, as a Markdown file of nothing but Mermaid
+blocks. It writes `out-1.svg`, `out-2.svg` and so on beside the name it's given.
+One diagram with a mistake in it fails the whole batch, and then each diagram
+gets a run of its own so that only the broken one is drawn as text. Without
+`mmdc` they all are.
+
+Typst draws SVG text itself, but not the HTML that mermaid.js likes to put in
+labels, so `htmlLabels` is off.
+
+```go
+// drawn returns the SVG of each Mermaid block that mermaid-cli could draw,
+// by the line the block opens on.
+func drawn(d *lit.Doc) map[int]string {
+	var at []int
+	var srcs []string
+	for _, b := range d.Blocks {
+		if b.Lang == "mermaid" && b.Strip == 0 {
+			at = append(at, b.Open)
+			srcs = append(srcs, strings.Join(d.Lines[b.First():b.Last()+1], "\n"))
+		}
+	}
+	if len(srcs) == 0 {
+		return nil
+	}
+	bin, err := exec.LookPath("mmdc")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "litgo: mmdc is not installed (npm install -g @mermaid-js/mermaid-cli), so diagrams are drawn as text")
+		return nil
+	}
+	svgs := mmdc(bin, srcs)
+	if svgs == nil && len(srcs) > 1 {
+		svgs = make([]string, len(srcs))
+		for i, src := range srcs {
+			if one := mmdc(bin, []string{src}); one != nil {
+				svgs[i] = one[0]
+			}
+		}
+	}
+	figures := map[int]string{}
+	for i, svg := range svgs {
+		if svg != "" {
+			figures[at[i]] = svg
+		}
+	}
+	return figures
+}
+
+// mmdc draws every diagram in one run of mermaid-cli, or returns nil.
+func mmdc(bin string, srcs []string) []string {
+	dir, err := os.MkdirTemp("", "litgo-mermaid")
+	if err != nil {
+		return nil
+	}
+	defer os.RemoveAll(dir)
+	var md strings.Builder
+	for _, src := range srcs {
+		md.WriteString("```mermaid\n" + src + "\n```\n\n")
+	}
+	os.WriteFile(filepath.Join(dir, "in.md"), []byte(md.String()), 0o644)
+	os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"htmlLabels": false, "flowchart": {"htmlLabels": false}}`), 0o644)
+	cmd := exec.Command(bin, "-i", "in.md", "-o", "out.svg", "-c", "config.json", "-b", "transparent", "-q")
+	cmd.Dir = dir
+	if err := cmd.Run(); err != nil {
+		return nil
+	}
+	svgs := make([]string, len(srcs))
+	for i := range srcs {
+		svg, err := os.ReadFile(filepath.Join(dir, fmt.Sprintf("out-%d.svg", i+1)))
+		if err != nil {
+			return nil
+		}
+		svgs[i] = string(svg)
+	}
+	return svgs
 }
 ```
 
@@ -5761,6 +5845,7 @@ var typstTarget = target{
 		rawTypst("#lit-literal.update(false)"),
 	},
 	diagrams:  true,
+	figure:    func(svg string) string { return rawTypst("#lit-figure(" + typstString(svg) + ")") },
 	dropTitle: true,
 }
 ```
@@ -5777,7 +5862,9 @@ var preamble string
 
 // Typst returns the document as Typst markup.
 func Typst(d *lit.Doc) (string, error) {
-	body, err := pandoc(weave(d, typstTarget), "--to", "typst")
+	t := typstTarget
+	t.figures = drawn(d)
+	body, err := pandoc(weave(d, t), "--to", "typst")
 	if err != nil {
 		return "", err
 	}
@@ -5878,6 +5965,20 @@ broken across pages.
 }
 ```
 
+A diagram that mermaid.js drew arrives as SVG. mermaid.js sizes it for a screen,
+with 16px text, so it's scaled down to sit beside 10.5pt prose, and further if
+that's what it takes to fit the page.
+
+```typ
+#let lit-figure(svg) = layout(page => {
+  let data = bytes(svg)
+  let natural = measure(image(data, format: "svg"))
+  let scale = calc.min(0.62, page.width / natural.width, 0.8 * page.height / natural.height)
+  align(center, block(breakable: false, above: 1.4em, below: 1.4em,
+    image(data, format: "svg", width: scale * natural.width)))
+})
+```
+
 A reference in code is a comment that holds a name in double angle brackets.
 The name gets shown the way the editor shows it, and linked to its chunk if
 there is one. By the time a show rule sees the comment, the syntax highlighter
@@ -5966,6 +6067,11 @@ func TestWeaveForTypst(t *testing.T) {
 	if strings.Contains(out, "# Title") || strings.Contains(out, "```mermaid") {
 		t.Errorf("the title and the diagram source should be gone:\n%s", out)
 	}
+	drew := typstTarget
+	drew.figures = map[int]string{4: `<svg id="a"/>`}
+	if out := weave(d, drew); !strings.Contains(out, `#lit-figure("<svg id=\"a\"/>")`) || strings.Contains(out, "```diagram") {
+		t.Errorf("the drawn diagram should stand in for the block:\n%s", out)
+	}
 	if Title(d) != "Title" || Summary(d) != "package main · tangles to t.go" {
 		t.Errorf("title %q, summary %q", Title(d), Summary(d))
 	}
@@ -6017,7 +6123,7 @@ Editor protocol (document on stdin, JSON on stdout):
 Positions in the editor protocol are 0-based; columns are bytes.
 `
 
-const VERSION = "0.1.3"
+const VERSION = "0.1.4"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -9154,6 +9260,7 @@ M.config = {
     vet = false, -- also report `go vet` findings as warnings
     timeout = "60s", -- kill runaway programs; "" to disable
     jump = true, -- move the cursor to the first error
+    focus = true, -- put the cursor in the output panel when the run ends, so q closes it
     on_save = false, -- :TangleCompileAndRun after every write (toggle with :LitWatch)
     panel_height = 12,
   },
@@ -9162,8 +9269,8 @@ M.config = {
     virtual_lines = true, -- show them under the offending line rather than beside it
     gopls = true, -- completion, hover, definitions, references, rename in Go blocks; or a path, or false
     settings = nil, -- gopls settings, e.g. { buildFlags = { "-tags=integration" } }
-    completion = false, -- true: Neovim's own completion popup as you type. Leave it off with
-    -- nvim-cmp or blink.cmp, which find the server by themselves.
+    completion = "auto", -- "auto": Neovim's own completion popup as you type, unless a
+    -- completion plugin is loaded. true forces it on, false off.
   },
   weave = { open = true },
   untangle = { jump = false }, -- true: go to the new chunk to document it right away
@@ -9268,6 +9375,36 @@ local function define_highlights()
   for name, target in pairs(links) do
     vim.api.nvim_set_hl(0, name, { link = target, default = true })
   end
+end
+```
+
+A completion plugin offers the same sources everywhere in the buffer, which in
+a Go block means Markdown snippets and words from the prose alongside what
+gopls has to say. The plugin can't reach into someone else's configuration, so
+it answers the question instead: is this line inside a Go block? Counting
+fences from the top is enough, and cheap, because a completion menu only asks
+about the line the cursor is on.
+
+```lua
+--- Is a line (0-based; the cursor's by default) inside a Go block?
+function M.in_go_block(buf, line)
+  buf = buf or 0
+  if not M.is_lit(buf) then
+    return false
+  end
+  line = line or (vim.api.nvim_win_get_cursor(0)[1] - 1)
+  local lang, fence = nil, nil
+  for _, l in ipairs(vim.api.nvim_buf_get_lines(buf, 0, line, false)) do
+    local marks, rest = l:match("^%s*(``+`)%s*(.*)$")
+    if marks then
+      if not fence then
+        fence, lang = marks, rest:match("^[%w_+-]*")
+      elseif #marks >= #fence then
+        fence, lang = nil, nil
+      end
+    end
+  end
+  return lang == "go"
 end
 ```
 
@@ -9746,7 +9883,14 @@ end
 ```
 
 Program output streams into a panel at the bottom. The positions in it are
-already in terms of the document, and pressing `<CR>` on one jumps there.
+already in terms of the document, and pressing `<CR>` on one jumps there, as
+`q` closes it again.
+
+While the program is running the cursor stays where the typing was, because a
+panel that steals the cursor mid-run is a panel that eats keystrokes. So the
+panel opens beside the work and gives the window back, and takes the cursor
+only once the run is over — unless the run ended at an error, where the cursor
+has somewhere better to be.
 
 ```lua
 local function panel_buf()
@@ -9801,6 +9945,20 @@ local function panel_win()
   vim.wo[win].wrap = true
   vim.api.nvim_set_current_win(current)
   return win
+end
+
+--- Put the cursor in the panel, if it is on screen.
+local function panel_focus()
+  local buf = panel.buf
+  if not (buf and vim.api.nvim_buf_is_valid(buf)) then
+    return
+  end
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_get_buf(win) == buf then
+      vim.api.nvim_set_current_win(win)
+      return
+    end
+  end
 end
 
 local function panel_clear()
@@ -9870,7 +10028,7 @@ function M.clear(buf)
   end
 end
 
---- Keep run diagnostics honest while editing: fixing a line dismisses its
+--- Keep run diagnostics accurate while editing: fixing a line dismisses its
 --- error, and errors below an edit move with their text.
 function M.attach(buf)
   vim.diagnostic.config({
@@ -10063,6 +10221,7 @@ function M.run(buf, args)
       end
       job = nil
       publish(diags, buf)
+      local jumped = false
       if cfg.jump and vim.api.nvim_get_current_buf() == buf then
         local name = vim.api.nvim_buf_get_name(buf)
         for _, d in ipairs(diags) do
@@ -10070,9 +10229,13 @@ function M.run(buf, args)
             local row = math.min(d.line + 1, vim.api.nvim_buf_line_count(buf))
             vim.api.nvim_win_set_cursor(0, { row, d.col })
             vim.cmd("normal! zv")
+            jumped = true
             break
           end
         end
+      end
+      if cfg.focus and not jumped and vim.api.nvim_get_current_buf() == buf then
+        panel_focus()
       end
     end)
   end)
@@ -10099,8 +10262,45 @@ buffer with a language server works here too: `K`, `grr`, `grn`, `<C-x><C-o>`,
 signature help on `<C-s>`, and whatever a completion plugin or a distribution
 adds.
 
+Completion is the exception, because nothing switches it on by itself.
+nvim-cmp and blink.cmp find the server through the buffer it is attached to, so
+they need nothing from the plugin; plain Neovim completes only when asked, on
+`<C-x><C-o>`. So the plugin turns Neovim's own popup on when no completion
+plugin is loaded, and stays out of the way when one is. A completion plugin is
+usually loaded on the first insert, which is later than the server attaches, so
+the question is asked on the first insert too — and then answered once.
+
 ```lua
 local M = {}
+
+--- The completion plugins that drive completion themselves.
+local engines = { "blink.cmp", "cmp", "coq" }
+
+local function engine_loaded()
+  for _, name in ipairs(engines) do
+    if package.loaded[name] then
+      return true
+    end
+  end
+  return false
+end
+
+--- Turn Neovim's own completion on for this buffer, unless something else
+--- is doing the job. Deferred to the first insert, because that is when a
+--- lazily loaded completion plugin arrives.
+local function complete_with(id, buf)
+  vim.api.nvim_create_autocmd("InsertEnter", {
+    buffer = buf,
+    once = true,
+    callback = function()
+      vim.schedule(function()
+        if not engine_loaded() and vim.api.nvim_buf_is_valid(buf) then
+          vim.lsp.completion.enable(true, id, buf, { autotrigger = true })
+        end
+      end)
+    end,
+  })
+end
 
 local function litgo()
   return require("litgo")
@@ -10139,7 +10339,9 @@ function M.start(buf)
         virtual_text = not cfg.virtual_lines,
         severity_sort = true,
       }, vim.lsp.diagnostic.get_namespace(client.id))
-      if cfg.completion then
+      if cfg.completion == "auto" then
+        complete_with(client.id, bufnr)
+      elseif cfg.completion then
         vim.lsp.completion.enable(true, client.id, bufnr, { autotrigger = true })
       end
     end,
@@ -10524,6 +10726,21 @@ check(panel_text():find("jobs finished") ~= nil, "program output reaches the pan
 check(panel_text():find("✓ built") ~= nil, "the build is reported")
 check(#vim.diagnostic.get(buf, { namespace = run.ns }) == 0, "a clean run leaves no diagnostics")
 
+-- The panel has the cursor when the run is over, and q gives it back.
+local function panel_win()
+  local pb = vim.fn.bufnr("litgo://output")
+  for _, w in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_get_buf(w) == pb then
+      return w
+    end
+  end
+end
+wait(10000, function() return vim.api.nvim_get_current_win() == panel_win() end, "the panel to take the cursor")
+check(vim.api.nvim_get_current_win() == panel_win(), "the output panel takes the cursor when the run ends")
+vim.api.nvim_feedkeys("q", "x", false)
+check(panel_win() == nil, "q closes it")
+check(vim.api.nvim_get_current_buf() == buf, "and the cursor is back in the document")
+
 -- Errors as you type: the language server, nothing run -------------------------
 local function diag(pattern, ns)
   for _, x in ipairs(vim.diagnostic.get(buf, { namespace = ns })) do
@@ -10533,6 +10750,13 @@ local function diag(pattern, ns)
   end
 end
 check(require("litgo.lsp").active(buf), "the language server is attached")
+
+-- What a completion plugin needs to keep Markdown snippets out of Go blocks.
+local blocks = require("litgo")
+check(blocks.in_go_block(buf, find(buf, "fmt.Println(r)") - 1), "a line of Go is in a Go block")
+check(not blocks.in_go_block(buf, find(buf, "# Worker pool") - 1), "a heading is not")
+check(not blocks.in_go_block(buf, find(buf, "flowchart LR") - 1), "and neither is a diagram")
+
 local l3 = find(buf, "fmt.Println(r)")
 vim.api.nvim_buf_set_lines(buf, l3 - 1, l3, false, { "\tfmt.Println(rr)" })
 wait(60000, function() return diag("undefined: rr") ~= nil end, "the language server to find the type error")
@@ -10546,6 +10770,7 @@ vim.api.nvim_win_set_cursor(0, { 1, 0 })
 vim.cmd("TangleCompileAndRun")
 wait(60000, function() return panel_text():find("build failed") ~= nil end, "the build to fail")
 wait(2000, function() return #vim.fn.getqflist() == 2 end, "the quickfix list")
+check(vim.api.nvim_get_current_win() ~= panel_win(), "a run that fails leaves the cursor in the document")
 check(first and vim.api.nvim_win_get_cursor(0)[1] == first.lnum + 1, "the cursor jumped to the first error")
 check(#vim.fn.getqflist() == 2, "the quickfix list mirrors the compiler")
 check(diag("undefined: rr", run.ns) == nil, "the run does not repeat what the server reports")
@@ -10554,7 +10779,7 @@ vim.api.nvim_buf_set_lines(buf, l3 - 1, l3, false, { "\tfmt.Println(r)" })
 wait(20000, function() return diag("undefined: rr") == nil and diag("declared and not used") == nil end, "the errors to clear")
 check(#vim.diagnostic.get(buf) == 0, "fixing the line clears the errors")
 
--- Diagnostics from a run (a panic, a failing test) stay honest between runs.
+-- Diagnostics from a run (a panic, a failing test) stay accurate between runs.
 vim.diagnostic.set(run.ns, buf, {
   { lnum = l3 - 1, col = 0, message = "panic: one", severity = 1 },
   { lnum = l3 + 1, col = 0, message = "panic: two", severity = 1 },

@@ -24,6 +24,9 @@ litgo tangle prog.lit.md   # write prog.go
 litgo weave  prog.lit.md   # write prog.pdf (needs pandoc and typst)
 ```
 
+The PDF's Mermaid diagrams are drawn by mermaid.js if `mmdc` is installed
+(`npm install -g @mermaid-js/mermaid-cli`), and as box-character text if not.
+
 Start from [examples/worker_pool.lit.md](examples/worker_pool.lit.md).
 
 ## Neovim
@@ -45,6 +48,30 @@ rename the chunk.
   build = "go build -o bin/litgo .",
   event = { "BufReadPre *.lit.md", "BufNewFile *.lit.md" },
   opts = {},
+}
+```
+
+When a run finishes, the output panel takes the cursor so that `q` closes it
+and hands the window back; a run that ends at an error puts the cursor on the
+error instead (`run.focus`, `run.jump`).
+
+nvim-cmp and blink.cmp pick the server up by themselves. Without one of those,
+the plugin turns Neovim's own completion popup on (`lsp.completion`: `"auto"`
+by default, or `true`/`false` to decide it yourself).
+
+A completion plugin offers the same sources everywhere in the buffer, so in a
+Go block you also get Markdown snippets and words from the prose.
+`require("litgo").in_go_block()` says whether the cursor is in a Go block,
+which is all blink.cmp needs to leave them out:
+
+```lua
+sources = {
+  default = function()
+    if require("litgo").in_go_block() then
+      return { "lsp", "path" }
+    end
+    return { "lsp", "path", "snippets", "buffer" }
+  end,
 }
 ```
 

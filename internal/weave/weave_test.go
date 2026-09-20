@@ -28,6 +28,11 @@ func TestWeaveForTypst(t *testing.T) {
 	if strings.Contains(out, "# Title") || strings.Contains(out, "```mermaid") {
 		t.Errorf("the title and the diagram source should be gone:\n%s", out)
 	}
+	drew := typstTarget
+	drew.figures = map[int]string{4: `<svg id="a"/>`}
+	if out := weave(d, drew); !strings.Contains(out, `#lit-figure("<svg id=\"a\"/>")`) || strings.Contains(out, "```diagram") {
+		t.Errorf("the drawn diagram should stand in for the block:\n%s", out)
+	}
 	if Title(d) != "Title" || Summary(d) != "package main · tangles to t.go" {
 		t.Errorf("title %q, summary %q", Title(d), Summary(d))
 	}

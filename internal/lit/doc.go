@@ -274,8 +274,6 @@ func (d *Doc) apply(dir *Directive, cur *File) {
 	}
 }
 
-// OutPath is where a file is written. The default file is named after the
-// document: name.lit.md tangles to name.go.
 func (d *Doc) OutPath(f *File) string {
 	dir := filepath.Dir(d.Path)
 	if f.Path != "" {

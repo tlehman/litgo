@@ -2,6 +2,35 @@
 
 local M = {}
 
+--- The completion plugins that drive completion themselves.
+local engines = { "blink.cmp", "cmp", "coq" }
+
+local function engine_loaded()
+  for _, name in ipairs(engines) do
+    if package.loaded[name] then
+      return true
+    end
+  end
+  return false
+end
+
+--- Turn Neovim's own completion on for this buffer, unless something else
+--- is doing the job. Deferred to the first insert, because that is when a
+--- lazily loaded completion plugin arrives.
+local function complete_with(id, buf)
+  vim.api.nvim_create_autocmd("InsertEnter", {
+    buffer = buf,
+    once = true,
+    callback = function()
+      vim.schedule(function()
+        if not engine_loaded() and vim.api.nvim_buf_is_valid(buf) then
+          vim.lsp.completion.enable(true, id, buf, { autotrigger = true })
+        end
+      end)
+    end,
+  })
+end
+
 local function litgo()
   return require("litgo")
 end
@@ -39,7 +68,9 @@ function M.start(buf)
         virtual_text = not cfg.virtual_lines,
         severity_sort = true,
       }, vim.lsp.diagnostic.get_namespace(client.id))
-      if cfg.completion then
+      if cfg.completion == "auto" then
+        complete_with(client.id, bufnr)
+      elseif cfg.completion then
         vim.lsp.completion.enable(true, client.id, bufnr, { autotrigger = true })
       end
     end,
