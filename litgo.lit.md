@@ -127,6 +127,78 @@ jobs:
         uses: actions/deploy-pages@v4
 ```
 
+<!-- file: .github/workflows/release.yml -->
+
+Releases follow the `VERSION` constant in the command. Every push to `master`
+reads it, and if no release is tagged `v` plus that version yet, the push
+becomes that release. So publishing a version is changing one string, and a
+push that leaves the string alone publishes nothing. litgo depends on nothing
+but the standard library, which makes cross-compiling a matter of setting two
+variables, and one Linux machine builds for all four targets. The tests run
+first here too.
+
+```yaml
+name: release
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Is this version released?
+        id: version
+        run: |
+          version=$(sed -n 's/^const VERSION = "\(.*\)"$/\1/p' main.go)
+          test -n "$version"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          if gh release view "v$version" > /dev/null 2>&1; then
+            echo "v$version is already released"
+          else
+            echo "new=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-go@v5
+        if: steps.version.outputs.new
+        with:
+          go-version-file: go.mod
+      - name: Test
+        if: steps.version.outputs.new
+        run: |
+          go vet ./...
+          go test ./...
+      - name: Build
+        if: steps.version.outputs.new
+        run: |
+          tag=${{ steps.version.outputs.tag }}
+          mkdir dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            os=${target%/*} arch=${target#*/}
+            dir=litgo_${tag#v}_${os}_${arch}
+            mkdir "$dir"
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w" -o "$dir/litgo" .
+            cp LICENSE README.md "$dir"
+            tar -czf "dist/$dir.tar.gz" "$dir"
+          done
+          (cd dist && sha256sum *.tar.gz > checksums.txt)
+      - name: Publish
+        if: steps.version.outputs.new
+        run: |
+          gh release create ${{ steps.version.outputs.tag }} dist/* \
+            --target "$GITHUB_SHA" --title ${{ steps.version.outputs.tag }} --generate-notes
+```
+
 ## The format
 
 A `.lit.md` file is ordinary Markdown. Everything litgo needs goes in HTML

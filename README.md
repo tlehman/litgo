@@ -1,5 +1,12 @@
 # litgo
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/tlehman/litgo.svg)](https://pkg.go.dev/github.com/tlehman/litgo)
+[![Go Report Card](https://goreportcard.com/badge/github.com/tlehman/litgo)](https://goreportcard.com/report/github.com/tlehman/litgo)
+[![Go version](https://img.shields.io/github/go-mod/go-version/tlehman/litgo)](go.mod)
+[![Release](https://img.shields.io/github/v/release/tlehman/litgo)](https://github.com/tlehman/litgo/releases/latest)
+[![Build](https://github.com/tlehman/litgo/actions/workflows/pages.yml/badge.svg)](https://github.com/tlehman/litgo/actions/workflows/pages.yml)
+[![License: MIT](https://img.shields.io/github/license/tlehman/litgo)](LICENSE)
+
 Literate programming for Go. Write a program as Markdown; litgo tangles it to
 source, weaves it to a page, and runs it with every compiler error pointing at
 the Markdown.
@@ -15,6 +22,9 @@ woven at <https://tobilehman.com/litgo/>, which every push to `master` rebuilds.
 ```sh
 go install github.com/tlehman/litgo@latest
 ```
+
+Or download a binary for Linux or macOS (amd64, arm64) from the
+[latest release](https://github.com/tlehman/litgo/releases/latest).
 
 ## Use
 
@@ -84,3 +94,10 @@ Edit `litgo.lit.md`, never the generated files.
 go build -o bin/litgo .      # bootstrap from the committed sources
 bin/litgo run litgo.lit.md   # tangle, vet, test, rebuild bin/litgo
 ```
+
+Setting a new `VERSION` in the command and pushing to `master` publishes that
+release.
+
+## License
+
+[MIT](LICENSE)
