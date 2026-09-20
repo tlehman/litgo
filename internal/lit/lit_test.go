@@ -112,6 +112,158 @@ func TestLocateAndExact(t *testing.T) {
 	}
 }
 
+const twice = "<!-- package: main -->\n\n```go\nfunc a() {\n\t// <<step>>\n}\n\n" +
+	"func b() {\n\tif true {\n\t\t// <<step>>\n\t}\n}\n```\n\n" +
+	"<!-- chunk: step -->\n```go\nprintln(1)\n\nprintln(2)\n```\n"
+
+var roundTrips = map[string]string{"sample": sample, "multi": multi, "twice": twice}
+
+// char is one byte that tangling copied: where it was written, and where from.
+type char struct {
+	out               *Output
+	line, col         int
+	srcLine, srcCol   int
+	first, segmentEnd bool // the first copy of its source; the last byte of its segment
+}
+
+// chars lists every written character of a result, in the order Locate
+// searches: file by file, line by line.
+func chars(res *Result) []char {
+	var all []char
+	seen := map[[2]int]bool{}
+	for _, o := range res.Files {
+		for n, l := range o.Lines {
+			for _, s := range l.Segs {
+				for k := 0; k < s.Len; k++ {
+					src := [2]int{s.SrcLine, s.SrcCol + k}
+					all = append(all, char{o, n, s.OutCol + k, src[0], src[1], !seen[src], k == s.Len-1})
+					seen[src] = true
+				}
+			}
+		}
+	}
+	return all
+}
+
+func TestMapUndoesLocate(t *testing.T) {
+	for name, src := range roundTrips {
+		res := Parse("x.lit.md", []byte(src)).Tangle()
+		all := chars(res)
+		if len(all) == 0 {
+			t.Fatalf("%s: nothing was tangled", name)
+		}
+		for _, c := range all {
+			o, line, col, ok := res.Locate(c.srcLine, c.srcCol)
+			if !ok {
+				t.Errorf("%s: Locate(%d:%d) finds nothing, but it was written at %s:%d:%d", name, c.srcLine, c.srcCol, c.out.Path, c.line, c.col)
+				continue
+			}
+			if sl, sc, _, ok := o.Map(line, col); !ok || sl != c.srcLine || sc != c.srcCol {
+				t.Errorf("%s: Map(Locate(%d:%d)) = %d:%d %v", name, c.srcLine, c.srcCol, sl, sc, ok)
+			}
+		}
+	}
+}
+
+func TestLocateUndoesMap(t *testing.T) {
+	for name, src := range roundTrips {
+		res := Parse("x.lit.md", []byte(src)).Tangle()
+		copies := 0
+		for _, c := range chars(res) {
+			sl, sc, _, ok := c.out.Map(c.line, c.col)
+			if !ok || sl != c.srcLine || sc != c.srcCol {
+				t.Errorf("%s: Map(%s:%d:%d) = %d:%d %v, but the segment says %d:%d", name, c.out.Path, c.line, c.col, sl, sc, ok, c.srcLine, c.srcCol)
+				continue
+			}
+			o, line, col, ok := res.Locate(sl, sc)
+			same := ok && o == c.out && line == c.line && col == c.col
+			switch {
+			case !ok:
+				t.Errorf("%s: Locate(Map(%s:%d:%d)) finds nothing", name, c.out.Path, c.line, c.col)
+			case c.first && !same:
+				t.Errorf("%s: Locate(Map(%s:%d:%d)) = %s:%d:%d", name, c.out.Path, c.line, c.col, o.Path, line, col)
+			case !c.first:
+				copies++
+				back, backCol, _, _ := o.Map(line, col)
+				earlier := o == c.out && (line < c.line || line == c.line && col < c.col)
+				if same || !earlier || back != sl || backCol != sc {
+					t.Errorf("%s: from the later copy %d:%d, Locate(Map) = %d:%d, which is not an earlier copy of %d:%d", name, c.line, c.col, line, col, sl, sc)
+				}
+			}
+		}
+		if (copies > 0) != (name == "twice") {
+			t.Errorf("%s: %d characters are later copies", name, copies)
+		}
+	}
+}
+
+func TestWhereTheInverseStops(t *testing.T) {
+	d := Parse("x.lit.md", []byte(sample))
+	res := d.Tangle()
+	o := res.Files[0]
+
+	// Generated text: Map answers with the nearest thing, so many positions
+	// share one answer and Locate can return to at most one of them.
+	var body int
+	for n, l := range o.Lines {
+		if l.Text == "\t\t\tfmt.Println(i)" {
+			body = n
+		}
+	}
+	sl, sc, _, _ := o.Map(body, 2) // the first byte of the chunk's own text
+	for col := 0; col < 2; col++ { // the indentation tangling put before it
+		if l, c, _, ok := o.Map(body, col); !ok || l != sl || c != sc {
+			t.Errorf("Map(%d:%d) = %d:%d, want the nearest segment's start %d:%d", body, col, l, c, sl, sc)
+		}
+	}
+	if _, line, col, _ := res.Locate(sl, sc); line != body || col != 2 {
+		t.Errorf("Locate returns to the text at %d:2, not the indentation, got %d:%d", body, line, col)
+	}
+
+	// Text that isn't tangled: Locate has no answer, and Map never gives one.
+	// A position has an answer if it is a tangled character or the gap
+	// after one, and those are all the answers there are. Even a directive
+	// is only tangled in part: its value is, the markup around it isn't.
+	written := map[[2]int]bool{}
+	for _, c := range chars(res) {
+		written[[2]int{c.srcLine, c.srcCol}] = true
+	}
+	prose := 0
+	for n, l := range d.Lines {
+		for col := 0; col <= len(l); col++ {
+			want := written[[2]int{n, col}] || written[[2]int{n, col - 1}]
+			if _, _, _, ok := res.Locate(n, col); ok != want {
+				t.Errorf("Locate(%d:%d) = %v in %q", n, col, ok, l)
+			}
+			if !want {
+				prose++
+			}
+		}
+	}
+	if prose == 0 {
+		t.Error("the sample has no prose to fail on")
+	}
+
+	// The end of a segment: Locate takes it, Map steps back or aside, and
+	// Exact is the one that returns.
+	for _, c := range chars(res) {
+		if !c.segmentEnd || !c.first {
+			continue
+		}
+		oo, line, col, ok := res.Locate(c.srcLine, c.srcCol+1)
+		if !ok || oo != c.out || line != c.line || col != c.col+1 {
+			t.Errorf("Locate(%d:%d), the end of a segment, = %d:%d %v", c.srcLine, c.srcCol+1, line, col, ok)
+			continue
+		}
+		if l, cc, _, _ := oo.Map(line, col); l == c.srcLine && cc == c.srcCol+1 {
+			t.Errorf("Map(%d:%d) returned to the end of a segment; the table under \"Two halves of one map\" is out of date", line, col)
+		}
+		if l, cc, ok := oo.Exact(line, col, true); !ok || l != c.srcLine || cc != c.srcCol+1 {
+			t.Errorf("Exact(%d:%d, end) = %d:%d %v, want %d:%d", line, col, l, cc, ok, c.srcLine, c.srcCol+1)
+		}
+	}
+}
+
 func TestMentionsAndImports(t *testing.T) {
 	d := Parse("x.lit.md", []byte(sample))
 	name := func(m *Mention) string {

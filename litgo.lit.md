@@ -1103,6 +1103,53 @@ func (o *Output) Exact(line, col int, end bool) (srcLine, srcCol int, ok bool) {
 }
 ```
 
+## Two halves of one map
+
+`Map` and `Locate` read the same segments in opposite directions, and
+everything the editor does through gopls goes through both: a request goes out
+through `Locate` and its answer comes back through `Map`. If the two disagreed
+by a column, completion would insert text one character off and a rename would
+eat the letter next to the name. So this is the invariant they keep. Call a
+byte of the document that tangling wrote somewhere a *tangled character*, $p$,
+and a byte of an output file that a segment covers a *written character*, $q$.
+Then
+
+$$\mathrm{Map}(\mathrm{Locate}(p)) = p$$
+
+for every tangled character, with no exceptions. Going the other way needs one
+qualification, because tangling isn't one-to-one. A chunk that is used twice is
+written twice, so two written characters share one source, and `Locate` can
+only return one of them. It returns the first, which makes
+
+$$\mathrm{Locate}(\mathrm{Map}(q)) = q$$
+
+true exactly when $q$ is the first copy of its text, and for a later copy it
+gives the first copy instead: a different place that holds the same character
+from the same source. Asking gopls about the first copy of a chunk while the
+cursor is in the chunk is the right question anyway, since the chunk is one
+piece of text however many times it is written.
+
+In other words `Locate` is a right inverse of `Map` everywhere, and a left
+inverse wherever tangling is one-to-one. Each function also accepts positions
+the other never produces, and the invariant says nothing about those:
+
+| Position                           | `Map`                         | `Locate`                 |
+|:-----------------------------------|:------------------------------|:-------------------------|
+| a tangled or written character     | exact                         | exact, the first copy    |
+| a generated line, added indentation | the nearest segment           | never produced           |
+| prose, a reference, the markup of a directive | never produced     | fails                    |
+| the end of a segment               | the character before, or the chunk spliced in after | the end of the segment |
+
+The last row is the only place where the two overlap and still disagree, and
+it's on purpose. The end of a segment isn't a character, it's the gap after the
+last one, which is where the cursor sits while a word is being typed. `Locate`
+accepts it so that completion works at the end of a line. `Map` has no use for
+gaps, because a compiler's column always points at a character, so it sends a
+column past the end back to the last character. The function that does invert
+`Locate` there is `Exact`, asked for the end of a range. The tests in
+[Map and Locate undo each other](#map-and-locate-undo-each-other) check all of
+this, character by character.
+
 # Editing structure
 
 <!-- file: internal/lit/edit.go -->
@@ -2295,7 +2342,198 @@ func TestLocateAndExact(t *testing.T) {
 		t.Error("prose is not written anywhere")
 	}
 }
+```
 
+## Map and Locate undo each other
+
+The tests above check `Map` and `Locate` at a few chosen positions. The
+invariant from [Two halves of one map](#two-halves-of-one-map) is a claim about
+every position, so these tests visit every one: each byte of each segment of
+each file, in three documents. `sample` has an inline chunk spliced into the
+middle of a line, `multi` tangles to several files in several languages, and
+`twice` is here for the one thing the others lack, a chunk that is written
+twice, at two different depths of indentation.
+
+<!-- verbatim -->
+```go
+const twice = "<!-- package: main -->\n\n```go\nfunc a() {\n\t// <<step>>\n}\n\n" +
+	"func b() {\n\tif true {\n\t\t// <<step>>\n\t}\n}\n```\n\n" +
+	"<!-- chunk: step -->\n```go\nprintln(1)\n\nprintln(2)\n```\n"
+
+var roundTrips = map[string]string{"sample": sample, "multi": multi, "twice": twice}
+
+// char is one byte that tangling copied: where it was written, and where from.
+type char struct {
+	out               *Output
+	line, col         int
+	srcLine, srcCol   int
+	first, segmentEnd bool // the first copy of its source; the last byte of its segment
+}
+
+// chars lists every written character of a result, in the order Locate
+// searches: file by file, line by line.
+func chars(res *Result) []char {
+	var all []char
+	seen := map[[2]int]bool{}
+	for _, o := range res.Files {
+		for n, l := range o.Lines {
+			for _, s := range l.Segs {
+				for k := 0; k < s.Len; k++ {
+					src := [2]int{s.SrcLine, s.SrcCol + k}
+					all = append(all, char{o, n, s.OutCol + k, src[0], src[1], !seen[src], k == s.Len-1})
+					seen[src] = true
+				}
+			}
+		}
+	}
+	return all
+}
+```
+
+From the source and back is the half with no exceptions. Wherever a tangled
+character was written, and however many times, `Locate` finds a place and `Map`
+returns from it to the very byte that was asked about.
+
+```go
+func TestMapUndoesLocate(t *testing.T) {
+	for name, src := range roundTrips {
+		res := Parse("x.lit.md", []byte(src)).Tangle()
+		all := chars(res)
+		if len(all) == 0 {
+			t.Fatalf("%s: nothing was tangled", name)
+		}
+		for _, c := range all {
+			o, line, col, ok := res.Locate(c.srcLine, c.srcCol)
+			if !ok {
+				t.Errorf("%s: Locate(%d:%d) finds nothing, but it was written at %s:%d:%d", name, c.srcLine, c.srcCol, c.out.Path, c.line, c.col)
+				continue
+			}
+			if sl, sc, _, ok := o.Map(line, col); !ok || sl != c.srcLine || sc != c.srcCol {
+				t.Errorf("%s: Map(Locate(%d:%d)) = %d:%d %v", name, c.srcLine, c.srcCol, sl, sc, ok)
+			}
+		}
+	}
+}
+```
+
+From the output and back, `Map` is exact on every written character, and
+`Locate` returns to the same place if that place is the first copy. From a
+later copy it returns to the first one, and the test pins down what "the first
+one" means: an earlier position whose source is the same byte. The test also
+makes sure that `twice` really has later copies and that the other two
+documents really don't. Otherwise that branch could pass by never running.
+
+```go
+func TestLocateUndoesMap(t *testing.T) {
+	for name, src := range roundTrips {
+		res := Parse("x.lit.md", []byte(src)).Tangle()
+		copies := 0
+		for _, c := range chars(res) {
+			sl, sc, _, ok := c.out.Map(c.line, c.col)
+			if !ok || sl != c.srcLine || sc != c.srcCol {
+				t.Errorf("%s: Map(%s:%d:%d) = %d:%d %v, but the segment says %d:%d", name, c.out.Path, c.line, c.col, sl, sc, ok, c.srcLine, c.srcCol)
+				continue
+			}
+			o, line, col, ok := res.Locate(sl, sc)
+			same := ok && o == c.out && line == c.line && col == c.col
+			switch {
+			case !ok:
+				t.Errorf("%s: Locate(Map(%s:%d:%d)) finds nothing", name, c.out.Path, c.line, c.col)
+			case c.first && !same:
+				t.Errorf("%s: Locate(Map(%s:%d:%d)) = %s:%d:%d", name, c.out.Path, c.line, c.col, o.Path, line, col)
+			case !c.first:
+				copies++
+				back, backCol, _, _ := o.Map(line, col)
+				earlier := o == c.out && (line < c.line || line == c.line && col < c.col)
+				if same || !earlier || back != sl || backCol != sc {
+					t.Errorf("%s: from the later copy %d:%d, Locate(Map) = %d:%d, which is not an earlier copy of %d:%d", name, c.line, c.col, line, col, sl, sc)
+				}
+			}
+		}
+		if (copies > 0) != (name == "twice") {
+			t.Errorf("%s: %d characters are later copies", name, copies)
+		}
+	}
+}
+```
+
+Last come the positions outside the invariant, one test for each row of the
+table. They are here so that a change to any of them is a decision somebody
+makes, and not an accident.
+
+```go
+func TestWhereTheInverseStops(t *testing.T) {
+	d := Parse("x.lit.md", []byte(sample))
+	res := d.Tangle()
+	o := res.Files[0]
+
+	// Generated text: Map answers with the nearest thing, so many positions
+	// share one answer and Locate can return to at most one of them.
+	var body int
+	for n, l := range o.Lines {
+		if l.Text == "\t\t\tfmt.Println(i)" {
+			body = n
+		}
+	}
+	sl, sc, _, _ := o.Map(body, 2) // the first byte of the chunk's own text
+	for col := 0; col < 2; col++ { // the indentation tangling put before it
+		if l, c, _, ok := o.Map(body, col); !ok || l != sl || c != sc {
+			t.Errorf("Map(%d:%d) = %d:%d, want the nearest segment's start %d:%d", body, col, l, c, sl, sc)
+		}
+	}
+	if _, line, col, _ := res.Locate(sl, sc); line != body || col != 2 {
+		t.Errorf("Locate returns to the text at %d:2, not the indentation, got %d:%d", body, line, col)
+	}
+
+	// Text that isn't tangled: Locate has no answer, and Map never gives one.
+	// A position has an answer if it is a tangled character or the gap
+	// after one, and those are all the answers there are. Even a directive
+	// is only tangled in part: its value is, the markup around it isn't.
+	written := map[[2]int]bool{}
+	for _, c := range chars(res) {
+		written[[2]int{c.srcLine, c.srcCol}] = true
+	}
+	prose := 0
+	for n, l := range d.Lines {
+		for col := 0; col <= len(l); col++ {
+			want := written[[2]int{n, col}] || written[[2]int{n, col - 1}]
+			if _, _, _, ok := res.Locate(n, col); ok != want {
+				t.Errorf("Locate(%d:%d) = %v in %q", n, col, ok, l)
+			}
+			if !want {
+				prose++
+			}
+		}
+	}
+	if prose == 0 {
+		t.Error("the sample has no prose to fail on")
+	}
+
+	// The end of a segment: Locate takes it, Map steps back or aside, and
+	// Exact is the one that returns.
+	for _, c := range chars(res) {
+		if !c.segmentEnd || !c.first {
+			continue
+		}
+		oo, line, col, ok := res.Locate(c.srcLine, c.srcCol+1)
+		if !ok || oo != c.out || line != c.line || col != c.col+1 {
+			t.Errorf("Locate(%d:%d), the end of a segment, = %d:%d %v", c.srcLine, c.srcCol+1, line, col, ok)
+			continue
+		}
+		if l, cc, _, _ := oo.Map(line, col); l == c.srcLine && cc == c.srcCol+1 {
+			t.Errorf("Map(%d:%d) returned to the end of a segment; the table under \"Two halves of one map\" is out of date", line, col)
+		}
+		if l, cc, ok := oo.Exact(line, col, true); !ok || l != c.srcLine || cc != c.srcCol+1 {
+			t.Errorf("Exact(%d:%d, end) = %d:%d %v, want %d:%d", line, col, l, cc, ok, c.srcLine, c.srcCol+1)
+		}
+	}
+}
+```
+
+## Mentions, problems and edits
+
+<!-- verbatim -->
+```go
 func TestMentionsAndImports(t *testing.T) {
 	d := Parse("x.lit.md", []byte(sample))
 	name := func(m *Mention) string {
@@ -6123,7 +6361,7 @@ Editor protocol (document on stdin, JSON on stdout):
 Positions in the editor protocol are 0-based; columns are bytes.
 `
 
-const VERSION = "0.1.4"
+const VERSION = "0.1.5"
 
 func main() {
 	if len(os.Args) < 2 {
