@@ -1,7 +1,6 @@
 # litgo
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/tlehman/litgo.svg)](https://pkg.go.dev/github.com/tlehman/litgo)
-[![Go Report Card](https://goreportcard.com/badge/github.com/tlehman/litgo)](https://goreportcard.com/report/github.com/tlehman/litgo)
 [![Go version](https://img.shields.io/github/go-mod/go-version/tlehman/litgo)](go.mod)
 [![Release](https://img.shields.io/github/v/release/tlehman/litgo)](https://github.com/tlehman/litgo/releases/latest)
 [![Build](https://github.com/tlehman/litgo/actions/workflows/pages.yml/badge.svg)](https://github.com/tlehman/litgo/actions/workflows/pages.yml)
