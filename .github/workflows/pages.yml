@@ -39,8 +39,12 @@ jobs:
           bin/litgo prove litgo.lit.md examples/isqrt.lit.md examples/vego-tutorial.lit.md examples/heap.lit.md
       - name: Weave
         run: |
-          mkdir _site
+          mkdir -p _site/examples
           bin/litgo weave --to html -o _site/index.html litgo.lit.md
+          for f in examples/*.lit.md; do
+            name=$(basename "$f" .lit.md)
+            bin/litgo weave --to html -o "_site/examples/$name.html" "$f"
+          done
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site

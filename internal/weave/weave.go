@@ -294,10 +294,22 @@ func HTML(d *lit.Doc, out string) error {
 	if err := os.WriteFile(header, []byte(headerHTML), 0o644); err != nil {
 		return err
 	}
+	toggle := filepath.Join(tmp, "toggle.html")
+	if err := os.WriteFile(toggle, []byte(toggleHTML), 0o644); err != nil {
+		return err
+	}
 	_, err = pandoc(Markdown(d), "--to", "html5", "--standalone", "--katex",
-		"--metadata", "pagetitle="+Title(d), "--include-in-header", header, "--output", out)
+		"--toc", "--toc-depth=2", "--variable", "toc-title=Contents",
+		"--metadata", "pagetitle="+Title(d), "--include-in-header", header,
+		"--include-before-body", toggle, "--output", out)
 	return err
 }
+
+// toggleHTML precedes the table of contents in the body, so that the
+// stylesheet can reach the contents from the checkbox with a sibling selector.
+const toggleHTML = `<input type="checkbox" id="toc-toggle">
+<label for="toc-toggle"><span class="toc-open">Contents</span><span class="toc-close">Close</span></label>
+`
 
 const headerHTML = `<style>
 :root { --fg:#1f2328; --bg:#ffffff; --muted:#656d76; --accent:#0a58ca; --code-bg:#f6f8fa; --rule:#d0d7de; }
@@ -305,7 +317,7 @@ const headerHTML = `<style>
   :root { --fg:#e6edf3; --bg:#0d1117; --muted:#8b949e; --accent:#79b8ff; --code-bg:#161b22; --rule:#30363d; }
 }
 html { color: var(--fg); background: var(--bg); }
-body { max-width: 46em; margin: 0 auto; padding: 2.5em 1em 6em; font: 17px/1.6 Georgia, "Iowan Old Style", serif; }
+body { max-width: 49rem; margin: 0 auto; padding: 2.5rem 1rem 6rem; font: 17px/1.6 Georgia, "Iowan Old Style", serif; }
 h1, h2, h3 { font-family: system-ui, sans-serif; line-height: 1.25; }
 h2 { margin-top: 2.2em; border-bottom: 1px solid var(--rule); padding-bottom: .2em; }
 a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
@@ -323,8 +335,70 @@ a.lit-ref { font-style: italic; font-family: Georgia, serif; }
 :target { scroll-margin-top: 1em; } .lit-chunk:target .lit-name { background: color-mix(in srgb, var(--accent) 22%, transparent); }
 pre.mermaid { background: transparent; text-align: center; }
 @media (prefers-color-scheme: dark) { pre.sourceCode span { filter: brightness(1.7) saturate(.8); } }
+
+/* The table of contents. Narrow: a button in the corner and a drawer, closed
+   until the checkbox behind the button is checked. Wide: a fixed column on the
+   left of the text, and no button. */
+#toc-toggle { display: none; }
+label[for="toc-toggle"] { position: fixed; right: 1rem; bottom: 1rem; z-index: 3; font: 600 14px system-ui, sans-serif; color: var(--bg); background: var(--accent); border-radius: 999px; padding: .6em 1.1em; cursor: pointer; box-shadow: 0 2px 10px rgba(0,0,0,.35); user-select: none; }
+label[for="toc-toggle"] .toc-close, #toc-toggle:checked ~ label[for="toc-toggle"] .toc-open { display: none; }
+#toc-toggle:checked ~ label[for="toc-toggle"] .toc-close { display: inline; }
+nav#TOC { display: none; position: fixed; top: 0; left: 0; bottom: 0; z-index: 2; width: min(20rem, 85vw); overflow-y: auto; scrollbar-width: thin; box-sizing: border-box; padding: 1.2rem 1.4rem 5rem; background: var(--bg); border-right: 1px solid var(--rule); box-shadow: 0 0 30px rgba(0,0,0,.35); font: 15px/1.5 system-ui, sans-serif; }
+#toc-toggle:checked ~ nav#TOC { display: block; }
+nav#TOC h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 .4em; padding: 0; border: 0; }
+nav#TOC ul { list-style: none; margin: 0; padding: 0; }
+nav#TOC > ul > li:has(ul) { margin-top: .6em; font-weight: 600; }
+nav#TOC ul ul { padding-left: 1rem; font-weight: 400; }
+nav#TOC a { display: block; color: var(--fg); padding: .15em .5em; margin-left: -.5em; border-radius: 4px; }
+nav#TOC a:hover { text-decoration: none; background: var(--code-bg); }
+nav#TOC a.toc-current { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+@media (min-width: 76rem) {
+  body { padding-left: 21rem; }
+  label[for="toc-toggle"] { display: none; }
+  nav#TOC { display: block; left: calc(50% - 35.5rem); width: 18rem; padding: 2.7rem 1rem 3rem 0; background: transparent; border: 0; box-shadow: none; }
+}
 </style>
 <script type="module">
+// A document with a single top-level heading doesn't need that heading listed
+// in the contents; the sections under it are the contents.
+const toc = document.getElementById('TOC'), h1 = document.querySelector('h1');
+if (toc && h1) {
+  const top = toc.querySelector(':scope > ul');
+  if (top && top.children.length === 1 && top.querySelector(':scope > li > a')?.getAttribute('href') === '#' + h1.id) {
+    const inner = top.querySelector(':scope > li > ul');
+    if (inner) top.replaceWith(inner); else toc.remove();
+  }
+}
+// As the page scrolls, the entry for the section in view is marked, and kept
+// in view in the contents. Following a link closes the drawer. The history is
+// not touched, so the back button undoes the link.
+if (toc?.isConnected) {
+  const links = new Map();
+  for (const a of toc.querySelectorAll('a[href^="#"]')) links.set(a.getAttribute('href').slice(1), a);
+  const heads = [...document.querySelectorAll('h1[id], h2[id]')].filter(h => links.has(h.id));
+  let current;
+  const spy = () => {
+    let h = heads[0];
+    for (const x of heads) { if (x.getBoundingClientRect().top <= innerHeight / 3) h = x; else break; }
+    if (scrollY + innerHeight >= document.documentElement.scrollHeight - 2) h = heads.at(-1);
+    if (!h || h === current) return;
+    current = h;
+    toc.querySelector('.toc-current')?.classList.remove('toc-current');
+    const a = links.get(h.id);
+    a.classList.add('toc-current');
+    const r = a.getBoundingClientRect(), n = toc.getBoundingClientRect();
+    if (r.top < n.top || r.bottom > n.bottom) toc.scrollTop += r.top - n.top - n.height / 2;
+  };
+  addEventListener('scroll', spy, { passive: true });
+  addEventListener('resize', spy);
+  // Scrolling that the browser does for itself, on the back button, doesn't
+  // always announce itself; headings crossing the viewport always do.
+  const seen = new IntersectionObserver(spy, { rootMargin: '0px 0px -60% 0px' });
+  for (const h of heads) seen.observe(h);
+  spy();
+  const toggle = document.getElementById('toc-toggle');
+  toc.addEventListener('click', e => { if (e.target.closest('a') && toggle) toggle.checked = false; });
+}
 // Chunk references are ordinary Go comments in the source; here they become
 // links to the definition.
 const slug = s => 'chunk-' + s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
