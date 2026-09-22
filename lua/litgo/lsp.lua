@@ -67,6 +67,7 @@ function M.start(buf)
         virtual_lines = cfg.virtual_lines,
         virtual_text = not cfg.virtual_lines,
         severity_sort = true,
+        [require("litgo.proof").handler] = true,
       }, vim.lsp.diagnostic.get_namespace(client.id))
       if cfg.completion == "auto" then
         complete_with(client.id, bufnr)

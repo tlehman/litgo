@@ -326,7 +326,7 @@ func (o *Output) Map(line, col int) (srcLine, srcCol int, via []int, ok bool) {
 		best := segs[0]
 		for _, s := range segs {
 			if col >= s.OutCol && col < s.OutCol+s.Len {
-				return s.SrcLine, s.SrcCol + col - s.OutCol, s.Via, true
+				return s.SrcLine, s.src(col), s.Via, true
 			}
 			if s.OutCol <= col {
 				best = s
@@ -377,7 +377,7 @@ func (r *Result) Locate(line, col int) (o *Output, outLine, outCol int, ok bool)
 		for n, l := range o.Lines {
 			for _, s := range l.Segs {
 				if s.SrcLine == line && col >= s.SrcCol && col <= s.SrcCol+s.Len {
-					return o, n, s.OutCol + col - s.SrcCol, true
+					return o, n, s.out(col), true
 				}
 			}
 		}
@@ -398,9 +398,25 @@ func (o *Output) Exact(line, col int, end bool) (srcLine, srcCol int, ok bool) {
 				lo, hi = lo+1, hi+1
 			}
 			if col >= lo && col <= hi {
-				return s.SrcLine, s.SrcCol + col - s.OutCol, true
+				return s.SrcLine, s.src(col), true
 			}
 		}
 	}
 	return 0, 0, false
 }
+
+// out is where the byte at column col of the source line went in the output.
+//
+// @ Requires s.SrcCol <= col ^ col <= s.SrcCol + s.Len
+func (s Seg) out(col int) (c int) { return s.OutCol + col - s.SrcCol }
+
+//@ Ensures s.OutCol <= c ^ c <= s.OutCol + s.Len
+//@ Ensures s.src(c) = col
+
+// src is where the byte at column col of the output line came from.
+//
+// @ Requires s.OutCol <= col ^ col <= s.OutCol + s.Len
+func (s Seg) src(col int) (c int) { return s.SrcCol + col - s.OutCol }
+
+//@ Ensures s.SrcCol <= c ^ c <= s.SrcCol + s.Len
+//@ Ensures s.out(c) = col

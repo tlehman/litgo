@@ -14,6 +14,7 @@ M.config = {
     math = true,
     mermaid = true,
     tables = true, -- line up the columns of Markdown tables
+    proofs = true, -- typeset the formulas of //@ annotations: ^ as ∧, <= as ≤, Forall as ∀
     chunks = true, -- show `// <<name>>` as ⟨name⟩ and chunk directives as ⟨name⟩ ≡
     conceal_source = true, -- hide diagram/display-math source while the cursor is elsewhere
     upright = false, -- true: keep math letters upright instead of 𝑖𝑡𝑎𝑙𝑖𝑐
@@ -29,7 +30,7 @@ M.config = {
     panel_height = 12,
   },
   lsp = {
-    enabled = true, -- run `litgo lsp`: chunk, syntax and type errors as you type
+    enabled = true, -- run `litgo lsp`: chunk, syntax, type and proof errors as you type
     virtual_lines = true, -- show them under the offending line rather than beside it
     gopls = true, -- completion, hover, definitions, references, rename in Go blocks; or a path, or false
     settings = nil, -- gopls settings, e.g. { buildFlags = { "-tags=integration" } }
@@ -43,6 +44,7 @@ M.config = {
     stop = "<localleader>s",
     tangle = "<localleader>t",
     weave = "<localleader>w",
+    prove = "<localleader>p",
     untangle = "<localleader>u", -- visual mode
     rename = "<localleader>n",
     toggle_render = "<localleader>v",
@@ -127,6 +129,19 @@ local function define_highlights()
   for name, target in pairs(links) do
     vim.api.nvim_set_hl(0, name, { link = target, default = true })
   end
+  local dark = vim.o.background ~= "light"
+  local violet = dark and "#c792ea" or "#7c3aed"
+  local faded = dark and "#a58fc4" or "#8b6fc0"
+  for name, spec in pairs({
+    LitgoProofKeyword = { fg = violet, bold = true },
+    LitgoProof = { fg = faded },
+    LitgoProofError = { fg = violet },
+    LitgoProofWarn = { fg = faded, italic = true },
+    LitgoProofUnderline = { undercurl = true, sp = violet },
+  }) do
+    spec.default = true
+    vim.api.nvim_set_hl(0, name, spec)
+  end
 end
 
 --- Is a line (0-based; the cursor's by default) inside a Go block?
@@ -173,6 +188,9 @@ function M.attach(buf)
   command("TangleCompileAndRun", function(o)
     run.run(buf, o.fargs)
   end, { nargs = "*", desc = "Tangle, compile and run; errors appear inline" })
+  command("Prove", function()
+    run.prove(buf)
+  end, { desc = "Check the //@ annotations: contracts, invariants, termination" })
   command("LitStop", function()
     run.stop()
   end, { desc = "Kill the running program" })
@@ -203,6 +221,7 @@ function M.attach(buf)
   map("n", keys.stop, "<cmd>LitStop<cr>", "stop the program")
   map("n", keys.tangle, "<cmd>Tangle<cr>", "tangle")
   map("n", keys.weave, "<cmd>Weave<cr>", "weave")
+  map("n", keys.prove, "<cmd>Prove<cr>", "prove the annotations")
   map("x", keys.untangle, ":Untangle<cr>", "untangle selection into a chunk")
   map("n", keys.rename, "<cmd>RenameChunk<cr>", "rename chunk")
   map("n", keys.toggle_render, "<cmd>LitRender<cr>", "toggle rendering")
@@ -227,6 +246,7 @@ function M.setup(opts)
   M.config = vim.tbl_deep_extend("force", M.config, opts or {})
   M._bin = nil
   define_highlights()
+  require("litgo.proof").setup()
   local group = vim.api.nvim_create_augroup("litgo", { clear = true })
   vim.api.nvim_create_autocmd({ "BufReadPost", "BufNewFile", "BufWinEnter" }, {
     group = group,

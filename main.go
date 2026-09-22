@@ -16,15 +16,18 @@ import (
 	"github.com/tlehman/litgo/internal/check"
 	"github.com/tlehman/litgo/internal/lit"
 	"github.com/tlehman/litgo/internal/lsp"
+	"github.com/tlehman/litgo/internal/vego"
 	"github.com/tlehman/litgo/internal/weave"
 )
 
 const usage = `litgo — literate Go
 
   litgo tangle [--force] [--stdout] FILE.lit.md...   write the Go source
-  litgo run    [--vet] [--timeout 30s] FILE [-- ARGS]  tangle, compile and run
+  litgo run    [--vet] [--no-prove] [--timeout 30s] FILE [-- ARGS]
+                                                     tangle, prove, compile and run
   litgo weave  [--to pdf|html|typ|md] [-o OUT] FILE  write a PDF through Typst, or a web page
-  litgo check  FILE.lit.md...                        chunk, syntax and type errors; writes nothing
+  litgo check  FILE.lit.md...                        chunk, syntax, type and proof errors; writes nothing
+  litgo prove  [--json] FILE.lit.md...               check the //@ annotations: contracts, invariants, termination
   litgo cat    FILE.lit.md                           print with math and diagrams rendered
   litgo fmt    [-w] FILE.lit.md                      gofmt the code blocks
 
@@ -39,7 +42,7 @@ Editor protocol (document on stdin, JSON on stdout):
 Positions in the editor protocol are 0-based; columns are bytes.
 `
 
-const VERSION = "0.1.6"
+const VERSION = "0.2.1"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -56,6 +59,8 @@ func main() {
 		os.Exit(cmdWeave(args))
 	case "check":
 		os.Exit(cmdCheck(args))
+	case "prove":
+		os.Exit(cmdProve(args))
 	case "cat":
 		os.Exit(cmdCat(args))
 	case "fmt":
@@ -177,6 +182,7 @@ func cmdRun(args []string) int {
 	fs.BoolVar(&o.json, "json", false, "emit one JSON event per line")
 	fs.BoolVar(&o.force, "force", false, "overwrite files litgo did not generate")
 	fs.BoolVar(&o.vet, "vet", false, "also run go vet")
+	fs.BoolVar(&o.noProve, "no-prove", false, "run even if the //@ annotations are not proved")
 	fs.DurationVar(&o.timeout, "timeout", 0, "kill the program after this long")
 	fs.Parse(args)
 	if fs.NArg() == 0 {
@@ -256,8 +262,67 @@ func cmdCheck(args []string) int {
 		if len(diags) == len(res.Diags) {
 			diags = append(diags, check.Types(res, cache)...)
 		}
+		if len(diags) == len(res.Diags) {
+			proofs, _ := vego.Prove(res)
+			diags = append(diags, proofs...)
+		}
 		if report(diags) > 0 {
 			status = 1
+		}
+	}
+	return status
+}
+
+func cmdProve(args []string) int {
+	fs := flag.NewFlagSet("prove", flag.ExitOnError)
+	asJSON := fs.Bool("json", false, "print the findings and the count as JSON")
+	fs.Parse(args)
+	if fs.NArg() == 0 {
+		fmt.Fprintln(os.Stderr, "litgo prove: no input files")
+		return 2
+	}
+	status := 0
+	for _, path := range fs.Args() {
+		doc, err := load(path)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "litgo:", err)
+			status = 1
+			continue
+		}
+		res := doc.Tangle()
+		diags := append(res.Diags, res.SyntaxCheck()...)
+		var sum vego.Summary
+		if len(diags) == len(res.Diags) && !res.HasErrors() {
+			var proofs []lit.Diag
+			proofs, sum = vego.Prove(res)
+			diags = append(diags, proofs...)
+		}
+		failed := false
+		for _, d := range diags {
+			failed = failed || d.Severity == lit.SevError
+		}
+		if failed {
+			status = 1
+		}
+		if *asJSON {
+			if diags == nil {
+				diags = []lit.Diag{}
+			}
+			printJSON(map[string]any{"file": doc.Path, "diagnostics": diags, "functions": sum.Functions,
+				"proved": sum.Proved, "obligations": sum.Obligations, "names": sum.Names})
+			continue
+		}
+		report(diags)
+		switch {
+		case failed && sum.Functions == 0:
+		case sum.Functions == 0:
+			fmt.Fprintf(os.Stderr, "litgo: %s has no //@ annotations, so there is nothing to prove\n", relPath(doc.Path))
+		default:
+			fmt.Fprintf(os.Stderr, "litgo: %s: proved %d of %d annotated functions (%d obligations)\n",
+				relPath(doc.Path), sum.Proved, sum.Functions, sum.Obligations)
+			for _, name := range sum.Names {
+				fmt.Fprintf(os.Stderr, "  ✓ %s\n", name)
+			}
 		}
 	}
 	return status
@@ -279,8 +344,8 @@ func cmdCat(args []string) int {
 	blocks := map[int]lit.Item{}
 	inline := map[int][]lit.Item{}
 	for _, it := range a.Items {
-		if it.Kind == "table" {
-			continue // lining up a table is the editor's business
+		if it.Kind == "table" || it.Kind == "vego" {
+			continue // lining up a table and colouring an annotation are the editor's business
 		} else if len(it.Lines) > 0 {
 			blocks[it.Line] = it
 		} else {

@@ -13,7 +13,7 @@ import (
 
 // Item is something an editor can render in place of, or next to, source text.
 type Item struct {
-	Kind    string   `json:"kind"` // math, math-block, mermaid, table, chunk-def, chunk-ref, file
+	Kind    string   `json:"kind"` // math, math-block, mermaid, table, chunk-def, chunk-ref, file, vego, vego-math
 	Line    int      `json:"line"`
 	Col     int      `json:"col"`
 	EndLine int      `json:"end_line"`
@@ -92,6 +92,8 @@ func (d *Doc) Analyze(o AnalyzeOptions) *Analysis {
 				a.Items = append(a.Items, Item{Kind: "math-block", Line: b.Open, EndLine: min(b.Close, len(d.Lines)-1),
 					Lines: latex.Render(src, latex.Options{Display: true, Upright: o.Upright})})
 			}
+		case "go":
+			a.Items = append(a.Items, d.proofItems(b, o)...)
 		}
 	}
 	a.Items = append(a.Items, d.mathItems(inBlock, o)...)
@@ -157,6 +159,214 @@ func plural(n int) string {
 		return ""
 	}
 	return "s"
+}
+
+// ProofKeywords are the words an annotation can start with. One that starts
+// with none of them is an Assert.
+var ProofKeywords = map[string]bool{"Requires": true, "Ensures": true, "Exsures": true, "Invariant": true,
+	"Variant": true, "Measure": true, "BaseCase": true, "InductionHypothesis": true, "Assert": true,
+	"Axiom": true, "Preserves": true, "Predicate": true, "Immutable": true, "Property": true}
+
+// ProofComment reports whether a line comment is an annotation, and returns
+// what follows the marker. The marker is //@. gofmt rewrites that to // @ in
+// a doc comment, so that is accepted too, but only in front of a keyword or
+// where the annotation above is not finished (continuing), because a comment
+// may well start with an @ for reasons of its own.
+func ProofComment(text string, continuing bool) (body string, ok bool) {
+	if strings.HasPrefix(text, "//@") {
+		return text[3:], true
+	}
+	if !strings.HasPrefix(text, "// @") {
+		return "", false
+	}
+	body = text[4:]
+	word, _, _ := strings.Cut(strings.TrimLeft(body, " \t"), " ")
+	return body, continuing || ProofKeywords[word]
+}
+
+// proofItems finds the VeGo annotations of a Go block: one item for the
+// annotation, and one for its formula, typeset.
+func (d *Doc) proofItems(b *Block, o AnalyzeOptions) []Item {
+	var out []Item
+	continuing := false
+	for i := b.First(); i <= b.Last() && i < len(d.Lines); i++ {
+		line := d.Lines[i]
+		text := strings.TrimLeft(line, " \t")
+		body, ok := ProofComment(text, continuing)
+		if !ok {
+			continuing = false
+			continue
+		}
+		word, _, _ := strings.Cut(strings.TrimLeft(body, " \t"), " ")
+		if continuing || !ProofKeywords[word] {
+			word = "" // a formula by itself is an Assert without the word
+		}
+		trimmed := strings.TrimRight(body, " \t")
+		continuing = strings.HasSuffix(trimmed, "||") || strings.HasSuffix(trimmed, " v") || strings.HasSuffix(trimmed, " in") ||
+			trimmed != "" && strings.ContainsAny(trimmed[len(trimmed)-1:], "^:=<>+-*/%(,[~!&")
+		out = append(out, Item{Kind: "vego", Line: i, EndLine: i, Col: len(line) - len(text), EndCol: len(line), Name: word})
+		formula := strings.TrimLeft(body, " \t")
+		if word != "" {
+			formula = strings.TrimLeft(formula[len(word):], " \t")
+		}
+		if math := proofMath(formula, o); math != "" {
+			out = append(out, Item{Kind: "vego-math", Line: i, EndLine: i, Col: len(line) - len(formula),
+				EndCol: len(strings.TrimRight(line, " \t")), Text: math})
+		}
+	}
+	return out
+}
+
+// proofOps are the operators of a formula, longest first, and their LaTeX.
+var proofOps = []struct{ op, tex string }{
+	{"<->", `\leftrightarrow `}, {"::=", `\coloneqq `}, {"...", `\infty `}, {"->", `\to `}, {"<-", `\leftarrow `},
+	{"<=", `\leq `}, {">=", `\geq `}, {"<>", `\neq `}, {"!=", `\neq `}, {"==", `= `}, {"&&", `\land `}, {"||", `\lor `},
+	{"^", `\land `}, {"~", `\lnot `}, {"!", `\lnot `}, {"*", `\cdot `}, {"%", `\bmod `},
+}
+
+var proofWords = map[string]string{"Forall": `\forall `, "Exists": `\exists `, "Unique": `\exists! `, "in": `\in `,
+	"true": `\text{true}`, "false": `\text{false}`, "len": `\text{len}`}
+
+// proofPower counts the factors of a product of one name with itself,
+// x*x*x, where the first x ends at j, and says where the product ends. A
+// name that is called or indexed is not the same factor.
+func proofPower(formula string, j int, word string) (n, end int) {
+	n, end = 1, j
+	for {
+		k := end
+		for k < len(formula) && formula[k] == ' ' {
+			k++
+		}
+		if k >= len(formula) || formula[k] != '*' {
+			return n, end
+		}
+		for k++; k < len(formula) && formula[k] == ' '; k++ {
+		}
+		if !strings.HasPrefix(formula[k:], word) {
+			return n, end
+		}
+		k += len(word)
+		if k < len(formula) {
+			if c := formula[k]; c == '_' || c == '.' || c == '\'' || c == '(' || c == '[' ||
+				c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' {
+				return n, end
+			}
+		}
+		n, end = n+1, k
+	}
+}
+
+// proofClose finds the ) that closes the ( at i, or returns 0.
+func proofClose(formula string, i int) int {
+	depth := 0
+	for k := i; k < len(formula); k++ {
+		switch formula[k] {
+		case '(':
+			depth++
+		case ')':
+			if depth--; depth == 0 {
+				return k
+			}
+		}
+	}
+	return 0
+}
+
+// proofMath typesets a formula the way the math in the prose is typeset.
+func proofMath(formula string, o AnalyzeOptions) string {
+	var tex strings.Builder
+	operand := false           // was the last thing something an operator can follow
+	quantifiers := 0           // that still wait for the colon before their body
+	powers := map[int][2]int{} // by the ) of a repeated factor: how often, and where the product ends
+	last := ""
+	for i := 0; i < len(formula); {
+		c := formula[i]
+		switch {
+		case c == ' ' || c == '\t':
+			i++
+		case c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z':
+			j := i
+			for j < len(formula) && (formula[j] == '_' || formula[j] == '.' && j+1 < len(formula) && formula[j+1] != '.' ||
+				formula[j] >= 'a' && formula[j] <= 'z' || formula[j] >= 'A' && formula[j] <= 'Z' || formula[j] >= '0' && formula[j] <= '9') {
+				j++
+			}
+			word := formula[i:j]
+			for j < len(formula) && formula[j] == '\'' {
+				j++
+			}
+			primes := formula[i+len(word) : j]
+			switch {
+			case word == "v" && primes == "" && operand:
+				tex.WriteString(`\lor `)
+				operand = false
+			case word == "Z" && last == "in":
+				tex.WriteString(`\mathbb{Z}`)
+				operand = true
+			case proofWords[word] != "" && primes == "":
+				if word == "Forall" || word == "Exists" || word == "Unique" {
+					quantifiers++
+				}
+				tex.WriteString(proofWords[word])
+				operand = word == "true" || word == "false"
+			default:
+				tex.WriteString(strings.ReplaceAll(word, "_", `\_`) + primes)
+				// x*x is a square, and is read more easily as one. After a / or a %
+				// it is not: a/x*x is (a/x)*x.
+				if n, end := proofPower(formula, j, word); n > 1 && primes == "" && last != "/" && last != "%" {
+					fmt.Fprintf(&tex, "^{%d}", n)
+					j = end
+				}
+				tex.WriteString(" ")
+				operand = true
+			}
+			last = word
+			i = j
+		default:
+			found := false
+			for _, op := range proofOps {
+				if strings.HasPrefix(formula[i:], op.op) {
+					tex.WriteString(op.tex)
+					i += len(op.op)
+					found, operand, last = true, op.op == "...", op.op
+					break
+				}
+			}
+			if !found && c == ':' && quantifiers > 0 {
+				// The colon of a quantifier gets room; the one in A[a:b) does not.
+				quantifiers--
+				tex.WriteString(`\;:\;`)
+				found, operand, last = true, false, ":"
+				i++
+			}
+			if c == '(' && !operand && last != "/" && last != "%" {
+				// (r+1)*(r+1) is a square too. Remember it until its first ) comes by.
+				if close := proofClose(formula, i); close > 0 {
+					if n, end := proofPower(formula, close+1, formula[i:close+1]); n > 1 {
+						powers[close] = [2]int{n, end}
+					}
+				}
+			}
+			if pw, ok := powers[i]; ok && c == ')' {
+				fmt.Fprintf(&tex, ")^{%d}", pw[0])
+				found, operand, last = true, true, ")"
+				i = pw[1]
+			}
+			if !found {
+				tex.WriteByte(c)
+				operand = c == ')' || c == ']' || c == '|' || c >= '0' && c <= '9'
+				last = string(c)
+				i++
+			}
+		}
+	}
+	if tex.Len() == 0 {
+		return ""
+	}
+	out := latex.Render(tex.String(), latex.Options{Upright: o.Upright})
+	if len(out) != 1 || strings.Contains(out[0], `\`) {
+		return ""
+	}
+	return out[0]
 }
 
 var displayOpenRe = regexp.MustCompile(`^\s*(\$\$|\\\[)`)

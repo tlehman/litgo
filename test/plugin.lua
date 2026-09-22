@@ -306,5 +306,100 @@ check(shown(5):find("completes               |", 1, true) ~= nil, "and the other
 vim.cmd("bwipeout!")
 
 vim.fn.delete(dir, "rf")
+-- Proofs ---------------------------------------------------------------------------
+local pdir = vim.fn.tempname()
+vim.fn.mkdir(pdir, "p")
+local pfile = pdir .. "/isqrt.lit.md"
+vim.fn.writefile(vim.fn.readfile(root .. "/examples/isqrt.lit.md"), pfile)
+vim.cmd.edit(pfile)
+local pbuf = vim.api.nvim_get_current_buf()
+wait(3000, function()
+  local st = render.get(pbuf)
+  return st and st.items ~= nil
+end, "analysis of the proved example")
+local keywords, formulas = 0, 0
+for _, m in ipairs(vim.api.nvim_buf_get_extmarks(pbuf, ns, 0, -1, { details = true })) do
+  if m[4].hl_group == "LitgoProofKeyword" then keywords = keywords + 1 end
+  if m[4].hl_group == "LitgoProof" then formulas = formulas + 1 end
+end
+check(keywords == 5 and formulas == 5, "the five annotations have a colour of their own (" .. keywords .. ")")
+local inv = find(pbuf, "//@ Invariant lo*lo")
+local km = vim.api.nvim_buf_get_extmarks(pbuf, ns, { inv - 1, 0 }, { inv - 1, -1 }, { details = true })[1]
+check(km and km[3] == 0 and km[4].end_col == #"//@ Invariant", "the keyword is set apart from the formula")
+
+-- The formula is typeset like the math in the prose, except under the cursor.
+local function typeset(row)
+  local text, hidden
+  for _, m in ipairs(vim.api.nvim_buf_get_extmarks(pbuf, ns, { row, 0 }, { row, -1 }, { details = true })) do
+    if m[4].virt_text_pos == "inline" then text = m[4].virt_text[1][1] end
+    if m[4].conceal then hidden = { m[3], m[4].end_col } end
+  end
+  return text, hidden
+end
+vim.api.nvim_win_set_cursor(0, { 1, 0 })
+render.draw(pbuf)
+local text, hidden = typeset(inv - 1)
+check(text == "𝑙𝑜² ≤ 𝑛 ∧ 𝑛 < ℎ𝑖²", "a formula is typeset: " .. tostring(text))
+check(hidden and hidden[1] == #"//@ Invariant " and hidden[2] == #"//@ Invariant lo*lo <= n ^ n < hi*hi", "in place of its source, and the keyword stays")
+vim.api.nvim_win_set_cursor(0, { inv, 0 })
+render.draw(pbuf)
+check(typeset(inv - 1) == nil, "and the source comes back under the cursor")
+vim.api.nvim_win_set_cursor(0, { 1, 0 })
+
+local function proof_marks()
+  local out = {}
+  for name, id in pairs(vim.api.nvim_get_namespaces()) do
+    if name:find("litgo-proof-", 1, true) then
+      vim.list_extend(out, vim.api.nvim_buf_get_extmarks(pbuf, id, 0, -1, { details = true }))
+    end
+  end
+  return out
+end
+local function proofs()
+  return vim.tbl_filter(require("litgo.proof").is_proof, vim.diagnostic.get(pbuf))
+end
+wait(10000, function() return require("litgo.lsp").active(pbuf) end, "the server on the proved example")
+check(#proofs() == 0 and #proof_marks() == 0, "a proved document has nothing violet under it")
+
+-- Break the bisection. It still compiles, so only the verifier can object.
+local lo = find(pbuf, "\tlo = mid")
+vim.api.nvim_buf_set_lines(pbuf, lo - 1, lo, false, { "\tlo = mid + 1" })
+wait(15000, function() return #proofs() == 2 end, "the verifier's objections")
+local failed = proofs()
+check(#failed == 2 and failed[1].lnum == inv - 2 and failed[1].message:find("Invariant is not maintained", 1, true) ~= nil,
+  "a broken invariant is reported at the invariant, as you type")
+check(#vim.diagnostic.get(pbuf) == 2, "and the compiler has nothing to add")
+local violet = proof_marks()
+check(#violet == 2 and violet[1][4].hl_group == "LitgoProofUnderline" and violet[1][4].virt_lines[1][1][2] == "LitgoProofError"
+  and vim.trim(violet[1][4].sign_text) == "∴", "it is drawn in the proof colour, not the compiler's")
+-- Neovim keeps marks of its own to follow a diagnostic through edits; what
+-- counts is a mark that draws something.
+local builtin = 0
+for name, id in pairs(vim.api.nvim_get_namespaces()) do
+  if not name:find("litgo-", 1, true) then
+    for _, m in ipairs(vim.api.nvim_buf_get_extmarks(pbuf, id, 0, -1, { details = true })) do
+      local d = m[4]
+      if d.hl_group or d.virt_text or d.virt_lines or d.sign_text then
+        builtin = builtin + 1
+      end
+    end
+  end
+end
+check(builtin == 0, "and the built-in handlers leave it alone")
+
+-- A run refuses to go further than the proof.
+vim.cmd("TangleCompileAndRun")
+wait(20000, function() return panel_text():find("not proved, so not run", 1, true) ~= nil end, "the run that is not proved")
+check(panel_text():find("proved 0 of 1", 1, true) ~= nil, "a run stops at a failed proof")
+check(panel_text():find("isqrt(", 1, true) == nil, "and the program was not run")
+
+vim.api.nvim_set_current_buf(pbuf)
+vim.api.nvim_buf_set_lines(pbuf, lo - 1, lo, false, { "\tlo = mid" })
+wait(15000, function() return #proofs() == 0 and #proof_marks() == 0 end, "the proof to come back")
+check(#proofs() == 0, "fixing the code takes the violet away")
+vim.cmd("Prove")
+wait(10000, function() return vim.g.litgo_last_proof ~= nil end, ":Prove")
+check(vim.g.litgo_last_proof == "1/1", ":Prove proves it without running it")
+
 print(failures == 0 and "\nall passed" or ("\n" .. failures .. " failed"))
 os.exit(failures == 0 and 0 or 1)

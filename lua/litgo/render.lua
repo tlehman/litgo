@@ -43,6 +43,8 @@ local function wanted(item, cfg)
     return cfg.mermaid
   elseif item.kind == "table" then
     return cfg.tables
+  elseif item.kind == "vego-math" then
+    return cfg.proofs
   end
   return cfg.chunks
 end
@@ -67,7 +69,18 @@ function M.draw(buf)
   local last = vim.api.nvim_buf_line_count(buf) - 1
 
   for _, it in ipairs(st.items) do
-    if wanted(it, cfg) then
+    if it.kind == "vego" then
+      -- An annotation keeps its colour under the cursor too: nothing is
+      -- hidden, so there is nothing to reveal.
+      local key_end = it.col + 3
+      if it.name and it.name ~= "" then
+        local line = vim.api.nvim_buf_get_lines(buf, it.line, it.line + 1, false)[1] or ""
+        local _, e = line:find(it.name, it.col + 4, true)
+        key_end = e or key_end
+      end
+      mark(buf, it.line, it.col, { end_col = key_end, hl_group = "LitgoProofKeyword", priority = 210 })
+      mark(buf, it.line, key_end, { end_col = it.end_col, hl_group = "LitgoProof", priority = 210 })
+    elseif wanted(it, cfg) then
       local under_cursor = cursor >= it.line and cursor <= it.end_line
       if it.lines then
         local hl = it.kind == "mermaid" and "LitgoDiagram" or "LitgoMath"
@@ -133,7 +146,7 @@ function M.draw(buf)
           end
         end
       else
-        local hl = ({ math = "LitgoMath", file = "LitgoFile" })[it.kind] or "LitgoChunk"
+        local hl = ({ math = "LitgoMath", file = "LitgoFile", ["vego-math"] = "LitgoProof" })[it.kind] or "LitgoChunk"
         if it.info == "undefined" then
           hl = "LitgoError"
         end
@@ -295,7 +308,7 @@ function M.attach(buf)
       state[buf] = nil
     end,
   })
-  vim.diagnostic.config({ virtual_text = true, signs = true, underline = true }, check_ns)
+  vim.diagnostic.config({ virtual_text = true, signs = true, underline = true, [require("litgo.proof").handler] = true }, check_ns)
   window_options(buf)
   M.refresh(buf)
 end

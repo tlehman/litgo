@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/tlehman/litgo/internal/lit"
+	"github.com/tlehman/litgo/internal/vego"
 )
 
 // reporter carries the run's progress to a person (plain text) or to an
@@ -210,6 +211,7 @@ type runOptions struct {
 	json    bool
 	force   bool
 	vet     bool
+	noProve bool
 	timeout time.Duration
 	args    []string
 }
@@ -244,7 +246,7 @@ func runFile(path string, o runOptions) int {
 	}
 
 	m := &remapper{dir: dir, outputs: map[string]*mapped{}}
-	ok := true
+	ok, unproved := true, false
 	for _, d := range docs {
 		res := d.Tangle()
 		for _, dg := range res.Diags {
@@ -269,9 +271,30 @@ func runFile(path string, o runOptions) int {
 			r.emit("tangle", map[string]any{"file": d.Path, "out": fmt.Sprintf("%d files", n)})
 			r.status("tangled %s → %d files", relPath(d.Path), n)
 		}
+		if !o.noProve {
+			start := time.Now()
+			proofs, sum := vego.Prove(res)
+			for _, dg := range proofs {
+				r.diag(dg)
+				if dg.Severity == lit.SevError {
+					ok, unproved = false, true
+				}
+			}
+			if sum.Functions > 0 {
+				r.emit("prove", map[string]any{"file": d.Path, "functions": sum.Functions, "proved": sum.Proved,
+					"obligations": sum.Obligations, "ms": time.Since(start).Milliseconds()})
+				r.status("proved %d of %d annotated functions in %s (%d obligations, %d ms)", sum.Proved, sum.Functions,
+					relPath(d.Path), sum.Obligations, time.Since(start).Milliseconds())
+			}
+		}
 	}
 	if !ok {
-		r.emit("build", map[string]any{"ok": false, "ms": 0, "stage": "tangle"})
+		stage := "tangle"
+		if unproved {
+			stage = "prove"
+			r.status("not proved, so not run (--no-prove runs it anyway)")
+		}
+		r.emit("build", map[string]any{"ok": false, "ms": 0, "stage": stage})
 		return 1
 	}
 	// A document that writes several files is a package or a module, and

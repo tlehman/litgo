@@ -128,10 +128,11 @@ local function publish(diags, origin)
   for file, list in pairs(by_file) do
     local buf = vim.fn.bufadd(file)
     vim.fn.bufload(buf)
-    -- What the compiler says, the language server has usually said already.
+    -- What the compiler and the verifier say, the language server has usually
+    -- said already.
     if require("litgo.lsp").reporting(buf) then
       list = vim.tbl_filter(function(d)
-        return d.source ~= "go build"
+        return d.source ~= "go build" and d.source ~= "vego"
       end, list)
     end
     vim.diagnostic.set(run_ns, buf, require("litgo.render").to_diagnostics(list, buf))
@@ -155,6 +156,7 @@ function M.attach(buf)
     signs = true,
     underline = true,
     severity_sort = true,
+    [require("litgo.proof").handler] = true,
   }, run_ns)
   -- Several edits can arrive before the scheduled update runs (a macro, a
   -- :global command), so each works on the result of the one before.
@@ -246,6 +248,33 @@ function M.weave(buf, format)
   end)
 end
 
+--- Check the //@ annotations without compiling or running anything.
+function M.prove(buf)
+  local bin = litgo().bin()
+  if not bin then
+    return
+  end
+  save(buf)
+  M.clear(buf)
+  vim.system({ bin, "prove", "--json", vim.api.nvim_buf_get_name(buf) }, { text = true }, function(res)
+    vim.schedule(function()
+      local ok, decoded = pcall(vim.json.decode, res.stdout or "")
+      if not ok or type(decoded) ~= "table" then
+        vim.notify("litgo: prove failed\n" .. (res.stderr or ""), vim.log.levels.ERROR)
+        return
+      end
+      publish(decoded.diagnostics or {}, buf)
+      vim.g.litgo_last_proof = ("%d/%d"):format(decoded.proved, decoded.functions)
+      local level = decoded.proved == decoded.functions and vim.log.levels.INFO or vim.log.levels.WARN
+      if decoded.functions == 0 then
+        vim.notify("litgo: no //@ annotations, so nothing to prove")
+      else
+        vim.notify(("litgo: ∴ proved %d of %d annotated functions (%d obligations)"):format(decoded.proved, decoded.functions, decoded.obligations), level)
+      end
+    end)
+  end)
+end
+
 function M.stop()
   if job then
     job:kill("sigterm")
@@ -289,12 +318,20 @@ function M.run(buf, args)
     elseif ev.event == "diagnostic" then
       diags[#diags + 1] = ev
       local where = ev.file and (ev.file .. ":" .. (ev.line + 1) .. ":" .. (ev.col + 1) .. ": ") or ""
-      panel_add(where .. ev.message, ev.severity == 1 and "LitgoError" or "DiagnosticWarn")
+      local hl = ev.severity == 1 and "LitgoError" or "DiagnosticWarn"
+      if require("litgo.proof").is_proof(ev) then
+        hl = ev.severity == 1 and "LitgoProofError" or "LitgoProofWarn"
+      end
+      panel_add(where .. ev.message, hl)
+    elseif ev.event == "prove" then
+      local all = ev.proved == ev.functions
+      panel_add(("∴ proved %d of %d annotated functions (%d obligations, %d ms)"):format(ev.proved, ev.functions, ev.obligations, ev.ms), all and "LitgoProofKeyword" or "LitgoProofError")
     elseif ev.event == "build" then
       if ev.ok then
         panel_add(("✓ built in %d ms"):format(ev.ms), "LitgoOk")
       else
-        panel_add("✗ " .. (ev.stage == "tangle" and "tangle failed" or "build failed"), "LitgoError")
+        local what = { tangle = "tangle failed", prove = "not proved, so not run" }
+        panel_add("✗ " .. (what[ev.stage] or "build failed"), ev.stage == "prove" and "LitgoProofError" or "LitgoError")
       end
     elseif ev.event == "output" then
       panel_add(ev.text, ev.stream == "stderr" and "DiagnosticWarn" or nil)
