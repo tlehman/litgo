@@ -6399,7 +6399,28 @@ div.sourceCode { margin: 0 0 1.2em; }
 a.lit-ref { font-style: italic; font-family: Georgia, serif; }
 :target { scroll-margin-top: 1em; } .lit-chunk:target .lit-name { background: color-mix(in srgb, var(--accent) 22%, transparent); }
 pre.mermaid { background: transparent; text-align: center; }
-@media (prefers-color-scheme: dark) { pre.sourceCode span { filter: brightness(1.7) saturate(.8); } }
+/* Dark mode brightens pandoc's highlighting. It used to do so with a CSS filter
+   on every span, but a filter gives each of the tens of thousands of spans a
+   layer of its own: some 350MB more in WebKit, which iOS Safari doesn't have,
+   so it gave up and reloaded the page for ever. These are the colours that
+   filter produced, written down once. */
+@media (prefers-color-scheme: dark) {
+  code span.al, code span.er { color: #da1d1d; }
+  code span.an, code span.co, code span.cv, code span.in, code span.wa { color: #b2fbfb; }
+  code span.at { color: #d7f165; }
+  code span.bn, code span.dv, code span.fl { color: #83f8c4; }
+  code span.bu, code span.im { color: #1fcd1f; }
+  code span.cf, code span.kw, code span.ot { color: #1cb448; }
+  code span.ch, code span.sc, code span.st, code span.vs { color: #7bbcf0; }
+  code span.cn { color: #d91b1b; }
+  code span.do { color: #e87474; }
+  code span.dt { color: #e66e33; }
+  code span.fu { color: #3372e2; }
+  code span.op { color: #adadad; }
+  code span.pp { color: #f5ce29; }
+  code span.ss { color: #f3b2e0; }
+  code span.va { color: #4d4add; }
+}
 
 /* The table of contents. Narrow: a button in the corner and a drawer, closed
    until the checkbox behind the button is checked. Wide: a fixed column on the
