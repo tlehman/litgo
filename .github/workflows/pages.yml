@@ -31,11 +31,12 @@ jobs:
         run: |
           curl -fsSL -o pandoc.deb "https://github.com/jgm/pandoc/releases/download/$PANDOC/pandoc-$PANDOC-1-amd64.deb"
           sudo dpkg -i pandoc.deb
-      - name: Build and test
+      - name: Build, test and prove
         run: |
           go vet ./...
           go test ./...
           go build -o bin/litgo .
+          bin/litgo prove litgo.lit.md examples/isqrt.lit.md examples/vego-tutorial.lit.md examples/heap.lit.md
       - name: Weave
         run: |
           mkdir _site

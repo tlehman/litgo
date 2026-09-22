@@ -448,6 +448,42 @@ func TestAnalyzeExample(t *testing.T) {
 	}
 }
 
+func TestProofMath(t *testing.T) {
+	for formula, want := range map[string]string{
+		"lo*lo <= n ^ n < hi*hi":                "𝑙𝑜² ≤ 𝑛 ∧ 𝑛 < ℎ𝑖²",
+		"x * x*x >= 0 ^ y*x*x = a/x*x":          "𝑥³ ≥ 0 ∧ 𝑦 · 𝑥² = 𝑎/𝑥 · 𝑥",
+		"n < (r+1)*(r+1) ^ (i+1)*i = f(x)*(x)":  "𝑛 < (𝑟 + 1)² ∧ (𝑖 + 1) · 𝑖 = 𝑓(𝑥) · (𝑥)",
+		"Forall k in [0, n) : (k)*(k) >= 0":     "∀𝑘 ∈ [0, 𝑛) : (𝑘)² ≥ 0",
+		"f*f(x) + A*A[i] + x*xs + x'*x'":        "𝑓 · 𝑓(𝑥) + 𝐴 · 𝐴[𝑖] + 𝑥 · 𝑥𝑠 + 𝑥′ · 𝑥′",
+		"at = -1 v 0 <= at < |A|":               "𝑎𝑡 = −1 ∨ 0 ≤ 𝑎𝑡 < |𝐴|",
+		"v >= 0 v v' <> v":                      "𝑣 ≥ 0 ∨ 𝑣′ ≠ 𝑣",
+		"~found -> x <> A[:]":                   "¬𝑓𝑜𝑢𝑛𝑑 → 𝑥 ≠ 𝐴[:]",
+		"Forall k in [0, |A|) : A[k] <> x":      "∀𝑘 ∈ [0, |𝐴|) : 𝐴[𝑘] ≠ 𝑥",
+		"Exists k in Z : a <-> b && c || !d":    "∃𝑘 ∈ ℤ : 𝑎 ↔ 𝑏 ∧ 𝑐 ∨ ¬𝑑",
+		"Sorted(A) ::= A[0:n) <= m":             "𝑆𝑜𝑟𝑡𝑒𝑑(𝐴) ≔ 𝐴[0:𝑛) ≤ 𝑚",
+		"q * d + A[i] % d = A[i] ^ ret_0 == 1":  "𝑞 · 𝑑 + 𝐴[𝑖] mod 𝑑 = 𝐴[𝑖] ∧ 𝑟𝑒𝑡_0 = 1",
+		"s.OutCol <= c ^ c <= s.OutCol + s.Len": "𝑠.𝑂𝑢𝑡𝐶𝑜𝑙 ≤ 𝑐 ∧ 𝑐 ≤ 𝑠.𝑂𝑢𝑡𝐶𝑜𝑙 + 𝑠.𝐿𝑒𝑛",
+		"Forall k in [0, ...) : k >= 0":         "∀𝑘 ∈ [0, ∞) : 𝑘 ≥ 0",
+		"":                                      "",
+	} {
+		if got := proofMath(formula, AnalyzeOptions{}); got != want {
+			t.Errorf("proofMath(%q) = %q, want %q", formula, got, want)
+		}
+	}
+	// The item covers the formula and nothing else, so that the keyword stays.
+	d := Parse("t.lit.md", []byte("```go\n\t//@ Invariant lo <= hi  \n\t//@ a ^ b\n\t// @ Ensures b\n\t//@   c\n```\n"))
+	var got []string
+	for _, it := range d.Analyze(AnalyzeOptions{}).Items {
+		if it.Kind == "vego-math" {
+			got = append(got, fmt.Sprintf("%d:%d-%d %s", it.Line, it.Col, it.EndCol, it.Text))
+		}
+	}
+	want := []string{"1:15-23 𝑙𝑜 ≤ ℎ𝑖", "2:5-10 𝑎 ∧ 𝑏", "3:14-15 𝑏", "4:7-8 𝑐"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("items = %q, want %q", got, want)
+	}
+}
+
 func TestTables(t *testing.T) {
 	src := "| Key | Does | Cost |\n|---|:-:|--:|\n| `\\r` | **run** it, see [docs](x) | $x^2$ |\n| a \\| b | short |\n\nnot | a table\n\n```go\n// | a | b |\n// |---|---|\n```\n"
 	d := Parse("t.lit.md", []byte(src))

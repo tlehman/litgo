@@ -14,6 +14,7 @@ import (
 
 	"github.com/tlehman/litgo/internal/check"
 	"github.com/tlehman/litgo/internal/lit"
+	"github.com/tlehman/litgo/internal/vego"
 )
 
 type message struct {
@@ -304,6 +305,9 @@ func (s *server) check() {
 		s.checking = true
 		go func() {
 			j.typed = check.Types(j.res, &s.cache)
+			if len(j.typed) == 0 {
+				j.typed, _ = vego.Prove(j.res)
+			}
 			select {
 			case s.checked <- j:
 			case <-s.quit:

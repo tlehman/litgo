@@ -1,4 +1,4 @@
-<!-- run: go vet ./... && go test ./... && go build -o bin/litgo . -->
+<!-- run: go vet . ./internal/... && go test . ./internal/... && go build -o bin/litgo . -->
 
 # litgo: literate Go
 
@@ -10,19 +10,26 @@ written by hand is the README.
 In a literate program the code is written for a human reader first. You put the
 code in whatever order explains it best, in pieces small enough to talk about
 one at a time, and a tool puts the pieces back in the order the compiler wants.
-litgo does three things with a document like that:
+litgo does four things with a document like that:
 
 * **tangle** it into source files,
 * **weave** it into a PDF or a web page for reading, with typeset math and
   drawn diagrams,
-* **run** it, and translate every compiler error, vet warning, test failure and
-  panic back to a line and column in the Markdown, so you never have to leave
-  the document to see what went wrong.
+* **prove** it, where the code says what it promises. A literate program is an
+  argument that the code is right, written for a person. The `//@` annotations
+  of [VeGo](https://arxiv.org/abs/2608.22630) are the same argument written
+  for a machine: a contract on a function, an invariant on a loop. litgo checks
+  them, so the part of the prose that says "this loop keeps `lo*lo <= n`" stops
+  being something the reader has to take on trust,
+* **run** it, and translate every compiler error, vet warning, failed proof,
+  test failure and panic back to a line and column in the Markdown, so you
+  never have to leave the document to see what went wrong.
 
 ```mermaid
 flowchart LR
     doc[litgo.lit.md] -->|tangle| src[Go and Lua source]
     doc -->|weave| page[PDF or web page]
+    doc -->|prove| qed[contracts and invariants, checked]
     src -->|go build| bin[bin/litgo]
     bin -->|run| doc
 ```
@@ -33,11 +40,20 @@ but Go, and after that litgo rebuilds itself:
 
 ```sh
 go build -o bin/litgo .        # stage 1, from the committed sources
-bin/litgo run litgo.lit.md     # tangle, vet, test, rebuild bin/litgo
+bin/litgo run litgo.lit.md     # tangle, prove, vet, test, rebuild bin/litgo
 ```
 
+litgo takes its own medicine in a small way. The arithmetic that translates a
+column between the Markdown and the tangled file is what every editor feature
+in this document depends on, and it is proved, by the verifier in this
+document, every time the line above is run. [Two halves of one
+map](#two-halves-of-one-map) says what is proved and, just as carefully, what
+is only tested.
+
 `litgo run` does what the `run:` directive on the first line of this document
-says. If you tangle this document with the binary it produces, you get back
+says. (It names the packages rather than saying `./...`, because running two of
+the examples leaves two `main` functions in `examples/`, which is fine for
+them and not for `go vet`.) If you tangle this document with the binary it produces, you get back
 exactly the sources that binary was built from. That fixed point is how we know
 the bootstrap works.
 
@@ -123,6 +139,15 @@ These are the directives:
 
 litgo never reformats the code it tangles. Each output line comes from one
 source line, so any position in the output can be traced back exactly.
+
+Specifications need no directive at all, because they are part of the code: a
+comment that starts with `//@` is a VeGo annotation, and goes wherever the Go
+it describes goes, through any number of chunks. A function's contract can sit
+in the block that introduces the function while the invariant sits three
+sections later, in the chunk with the loop, next to the paragraph that explains
+it. The verifier sees them joined up, the way the compiler sees the code.
+[Proofs](#proofs) is the chapter about them, and
+[A tutorial in proofs](#a-tutorial-in-proofs) the tour.
 
 # The document model
 
@@ -998,7 +1023,7 @@ func (o *Output) Map(line, col int) (srcLine, srcCol int, via []int, ok bool) {
 		best := segs[0]
 		for _, s := range segs {
 			if col >= s.OutCol && col < s.OutCol+s.Len {
-				return s.SrcLine, s.SrcCol + col - s.OutCol, s.Via, true
+				return s.SrcLine, s.src(col), s.Via, true
 			}
 			if s.OutCol <= col {
 				best = s
@@ -1065,7 +1090,7 @@ func (r *Result) Locate(line, col int) (o *Output, outLine, outCol int, ok bool)
 		for n, l := range o.Lines {
 			for _, s := range l.Segs {
 				if s.SrcLine == line && col >= s.SrcCol && col <= s.SrcCol+s.Len {
-					return o, n, s.OutCol + col - s.SrcCol, true
+					return o, n, s.out(col), true
 				}
 			}
 		}
@@ -1095,7 +1120,7 @@ func (o *Output) Exact(line, col int, end bool) (srcLine, srcCol int, ok bool) {
 				lo, hi = lo+1, hi+1
 			}
 			if col >= lo && col <= hi {
-				return s.SrcLine, s.SrcCol + col - s.OutCol, true
+				return s.SrcLine, s.src(col), true
 			}
 		}
 	}
@@ -1146,9 +1171,61 @@ last one, which is where the cursor sits while a word is being typed. `Locate`
 accepts it so that completion works at the end of a line. `Map` has no use for
 gaps, because a compiler's column always points at a character, so it sends a
 column past the end back to the last character. The function that does invert
-`Locate` there is `Exact`, asked for the end of a range. The tests in
-[Map and Locate undo each other](#map-and-locate-undo-each-other) check all of
-this, character by character.
+`Locate` there is `Exact`, asked for the end of a range.
+
+### What is proved, and what is tested
+
+Each function does two things: it *finds* a segment, and then it *translates*
+a column through it. The translation is arithmetic, it is where an off-by-one
+would live, and it is the same in all three functions. So it is written once,
+as two methods, and `Map`, `Locate` and `Exact` call them. Their contracts are
+the invariant of this section, stated about one segment, and
+[`litgo prove`](#proofs) proves them:
+
+```go
+// out is where the byte at column col of the source line went in the output.
+//
+// @ Requires s.SrcCol <= col ^ col <= s.SrcCol + s.Len
+func (s Seg) out(col int) (c int) { return s.OutCol + col - s.SrcCol }
+
+//@ Ensures s.OutCol <= c ^ c <= s.OutCol + s.Len
+//@ Ensures s.src(c) = col
+
+// src is where the byte at column col of the output line came from.
+//
+// @ Requires s.OutCol <= col ^ col <= s.OutCol + s.Len
+func (s Seg) src(col int) (c int) { return s.SrcCol + col - s.OutCol }
+
+//@ Ensures s.SrcCol <= c ^ c <= s.SrcCol + s.Len
+//@ Ensures s.out(c) = col
+```
+
+(The `// @` with a space is what gofmt makes of `//@` inside a doc comment.
+The verifier reads both, and this is the spelling that survives formatting on
+save.)
+
+Read the second `Ensures` of each: `src(out(col)) = col` and
+`out(src(col)) = col`, for every segment there could ever be and every column
+in it or at its end, and the first `Ensures` says that the result is a column
+the other function accepts. That is $\mathrm{Map} \circ \mathrm{Locate}$ and
+$\mathrm{Locate} \circ \mathrm{Map}$ being the identity *within a segment*,
+as a theorem rather than as a test that passed.
+
+It is not the whole invariant, and it would be wrong to say it was. That
+`Map(Locate(p)) = p` also needs the search in `Map` to arrive at the segment
+the search in `Locate` left from, and that is true because of how tangling
+lays segments out: on one output line they do not overlap, and two segments
+from one source line are either the same text written twice or have a chunk
+reference between them. Those are facts about slices of structs that hold
+slices, built by a recursive splice. The verifier's fragment is integers and
+slices of integers, so it declines, and says so, rather than prove something
+about a simplified model that is not the program. And the unqualified
+statement "`Map` and `Locate` are inverses" is simply not true, as the table
+above says: `Locate(Map(q)) = q` fails for the second copy of a chunk, by
+design. So the division of labour is this. The arithmetic is proved, for all
+inputs. The search, and the layout it relies on, are tested, in
+[Map and Locate undo each other](#map-and-locate-undo-each-other), character
+by character, on documents built to have every awkward case.
 
 # Editing structure
 
@@ -1800,7 +1877,7 @@ chunks are, and what is wrong.
 ```go
 // Item is something an editor can render in place of, or next to, source text.
 type Item struct {
-	Kind    string   `json:"kind"` // math, math-block, mermaid, table, chunk-def, chunk-ref, file
+	Kind    string   `json:"kind"` // math, math-block, mermaid, table, chunk-def, chunk-ref, file, vego, vego-math
 	Line    int      `json:"line"`
 	Col     int      `json:"col"`
 	EndLine int      `json:"end_line"`
@@ -1881,6 +1958,8 @@ func (d *Doc) Analyze(o AnalyzeOptions) *Analysis {
 				a.Items = append(a.Items, Item{Kind: "math-block", Line: b.Open, EndLine: min(b.Close, len(d.Lines)-1),
 					Lines: latex.Render(src, latex.Options{Display: true, Upright: o.Upright})})
 			}
+		case "go":
+			a.Items = append(a.Items, d.proofItems(b, o)...)
 		}
 	}
 	a.Items = append(a.Items, d.mathItems(inBlock, o)...)
@@ -1946,6 +2025,241 @@ func plural(n int) string {
 		return ""
 	}
 	return "s"
+}
+```
+
+## Finding the annotations
+
+A `//@` comment is a specification ([Proofs](#proofs) has the whole story), and
+to a syntax highlighter it is a comment like any other, grey and easy to skip.
+It is the most carefully chosen line in the block, so the editor gets told
+where the annotations are: the item runs from the `//@` to the end of the line,
+and `Name` is the keyword, which an editor can set apart from the formula.
+
+```go
+// ProofKeywords are the words an annotation can start with. One that starts
+// with none of them is an Assert.
+var ProofKeywords = map[string]bool{"Requires": true, "Ensures": true, "Exsures": true, "Invariant": true,
+	"Variant": true, "Measure": true, "BaseCase": true, "InductionHypothesis": true, "Assert": true,
+	"Axiom": true, "Preserves": true, "Predicate": true, "Immutable": true, "Property": true}
+
+// ProofComment reports whether a line comment is an annotation, and returns
+// what follows the marker. The marker is //@. gofmt rewrites that to // @ in
+// a doc comment, so that is accepted too, but only in front of a keyword or
+// where the annotation above is not finished (continuing), because a comment
+// may well start with an @ for reasons of its own.
+func ProofComment(text string, continuing bool) (body string, ok bool) {
+	if strings.HasPrefix(text, "//@") {
+		return text[3:], true
+	}
+	if !strings.HasPrefix(text, "// @") {
+		return "", false
+	}
+	body = text[4:]
+	word, _, _ := strings.Cut(strings.TrimLeft(body, " \t"), " ")
+	return body, continuing || ProofKeywords[word]
+}
+
+// proofItems finds the VeGo annotations of a Go block: one item for the
+// annotation, and one for its formula, typeset.
+func (d *Doc) proofItems(b *Block, o AnalyzeOptions) []Item {
+	var out []Item
+	continuing := false
+	for i := b.First(); i <= b.Last() && i < len(d.Lines); i++ {
+		line := d.Lines[i]
+		text := strings.TrimLeft(line, " \t")
+		body, ok := ProofComment(text, continuing)
+		if !ok {
+			continuing = false
+			continue
+		}
+		word, _, _ := strings.Cut(strings.TrimLeft(body, " \t"), " ")
+		if continuing || !ProofKeywords[word] {
+			word = "" // a formula by itself is an Assert without the word
+		}
+		trimmed := strings.TrimRight(body, " \t")
+		continuing = strings.HasSuffix(trimmed, "||") || strings.HasSuffix(trimmed, " v") || strings.HasSuffix(trimmed, " in") ||
+			trimmed != "" && strings.ContainsAny(trimmed[len(trimmed)-1:], "^:=<>+-*/%(,[~!&")
+		out = append(out, Item{Kind: "vego", Line: i, EndLine: i, Col: len(line) - len(text), EndCol: len(line), Name: word})
+		formula := strings.TrimLeft(body, " \t")
+		if word != "" {
+			formula = strings.TrimLeft(formula[len(word):], " \t")
+		}
+		if math := proofMath(formula, o); math != "" {
+			out = append(out, Item{Kind: "vego-math", Line: i, EndLine: i, Col: len(line) - len(formula),
+				EndCol: len(strings.TrimRight(line, " \t")), Text: math})
+		}
+	}
+	return out
+}
+```
+
+A formula is ASCII so that it can be typed, and mathematics so that it can be
+read, and those pull in different directions: `lo*lo <= n ^ n < hi*hi` is
+what the keyboard has, and $lo^2 \leq n \land n < hi^2$ is what
+it means. The prose of a document already gets this treatment, where `$...$`
+is drawn as Unicode and turns back into its source under the cursor. So a
+formula is translated into the LaTeX it would have been in the prose, and
+handed to the same renderer. It comes out looking like the math around it,
+italic letters and all, and nothing here knows what a `≤` is.
+
+The translation is a scan for words and operators. It does not parse, because
+it has to be right about a formula that is half typed. The one thing that
+needs care is `v`, which is *or* between two operands and a variable
+anywhere else. If the renderer leaves a backslash in its answer there was
+something it did not know, and the source is better than a guess.
+
+```go
+// proofOps are the operators of a formula, longest first, and their LaTeX.
+var proofOps = []struct{ op, tex string }{
+	{"<->", `\leftrightarrow `}, {"::=", `\coloneqq `}, {"...", `\infty `}, {"->", `\to `}, {"<-", `\leftarrow `},
+	{"<=", `\leq `}, {">=", `\geq `}, {"<>", `\neq `}, {"!=", `\neq `}, {"==", `= `}, {"&&", `\land `}, {"||", `\lor `},
+	{"^", `\land `}, {"~", `\lnot `}, {"!", `\lnot `}, {"*", `\cdot `}, {"%", `\bmod `},
+}
+
+var proofWords = map[string]string{"Forall": `\forall `, "Exists": `\exists `, "Unique": `\exists! `, "in": `\in `,
+	"true": `\text{true}`, "false": `\text{false}`, "len": `\text{len}`}
+
+// proofPower counts the factors of a product of one name with itself,
+// x*x*x, where the first x ends at j, and says where the product ends. A
+// name that is called or indexed is not the same factor.
+func proofPower(formula string, j int, word string) (n, end int) {
+	n, end = 1, j
+	for {
+		k := end
+		for k < len(formula) && formula[k] == ' ' {
+			k++
+		}
+		if k >= len(formula) || formula[k] != '*' {
+			return n, end
+		}
+		for k++; k < len(formula) && formula[k] == ' '; k++ {
+		}
+		if !strings.HasPrefix(formula[k:], word) {
+			return n, end
+		}
+		k += len(word)
+		if k < len(formula) {
+			if c := formula[k]; c == '_' || c == '.' || c == '\'' || c == '(' || c == '[' ||
+				c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' {
+				return n, end
+			}
+		}
+		n, end = n+1, k
+	}
+}
+
+// proofClose finds the ) that closes the ( at i, or returns 0.
+func proofClose(formula string, i int) int {
+	depth := 0
+	for k := i; k < len(formula); k++ {
+		switch formula[k] {
+		case '(':
+			depth++
+		case ')':
+			if depth--; depth == 0 {
+				return k
+			}
+		}
+	}
+	return 0
+}
+
+// proofMath typesets a formula the way the math in the prose is typeset.
+func proofMath(formula string, o AnalyzeOptions) string {
+	var tex strings.Builder
+	operand := false           // was the last thing something an operator can follow
+	quantifiers := 0           // that still wait for the colon before their body
+	powers := map[int][2]int{} // by the ) of a repeated factor: how often, and where the product ends
+	last := ""
+	for i := 0; i < len(formula); {
+		c := formula[i]
+		switch {
+		case c == ' ' || c == '\t':
+			i++
+		case c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z':
+			j := i
+			for j < len(formula) && (formula[j] == '_' || formula[j] == '.' && j+1 < len(formula) && formula[j+1] != '.' ||
+				formula[j] >= 'a' && formula[j] <= 'z' || formula[j] >= 'A' && formula[j] <= 'Z' || formula[j] >= '0' && formula[j] <= '9') {
+				j++
+			}
+			word := formula[i:j]
+			for j < len(formula) && formula[j] == '\'' {
+				j++
+			}
+			primes := formula[i+len(word) : j]
+			switch {
+			case word == "v" && primes == "" && operand:
+				tex.WriteString(`\lor `)
+				operand = false
+			case word == "Z" && last == "in":
+				tex.WriteString(`\mathbb{Z}`)
+				operand = true
+			case proofWords[word] != "" && primes == "":
+				if word == "Forall" || word == "Exists" || word == "Unique" {
+					quantifiers++
+				}
+				tex.WriteString(proofWords[word])
+				operand = word == "true" || word == "false"
+			default:
+				tex.WriteString(strings.ReplaceAll(word, "_", `\_`) + primes)
+				// x*x is a square, and is read more easily as one. After a / or a %
+				// it is not: a/x*x is (a/x)*x.
+				if n, end := proofPower(formula, j, word); n > 1 && primes == "" && last != "/" && last != "%" {
+					fmt.Fprintf(&tex, "^{%d}", n)
+					j = end
+				}
+				tex.WriteString(" ")
+				operand = true
+			}
+			last = word
+			i = j
+		default:
+			found := false
+			for _, op := range proofOps {
+				if strings.HasPrefix(formula[i:], op.op) {
+					tex.WriteString(op.tex)
+					i += len(op.op)
+					found, operand, last = true, op.op == "...", op.op
+					break
+				}
+			}
+			if !found && c == ':' && quantifiers > 0 {
+				// The colon of a quantifier gets room; the one in A[a:b) does not.
+				quantifiers--
+				tex.WriteString(`\;:\;`)
+				found, operand, last = true, false, ":"
+				i++
+			}
+			if c == '(' && !operand && last != "/" && last != "%" {
+				// (r+1)*(r+1) is a square too. Remember it until its first ) comes by.
+				if close := proofClose(formula, i); close > 0 {
+					if n, end := proofPower(formula, close+1, formula[i:close+1]); n > 1 {
+						powers[close] = [2]int{n, end}
+					}
+				}
+			}
+			if pw, ok := powers[i]; ok && c == ')' {
+				fmt.Fprintf(&tex, ")^{%d}", pw[0])
+				found, operand, last = true, true, ")"
+				i = pw[1]
+			}
+			if !found {
+				tex.WriteByte(c)
+				operand = c == ')' || c == ']' || c == '|' || c >= '0' && c <= '9'
+				last = string(c)
+				i++
+			}
+		}
+	}
+	if tex.Len() == 0 {
+		return ""
+	}
+	out := latex.Render(tex.String(), latex.Options{Upright: o.Upright})
+	if len(out) != 1 || strings.Contains(out[0], `\`) {
+		return ""
+	}
+	return out[0]
 }
 ```
 
@@ -2715,6 +3029,42 @@ func TestAnalyzeExample(t *testing.T) {
 	}
 	if len(a.Diagnostics) != 0 {
 		t.Errorf("diagnostics: %+v", a.Diagnostics)
+	}
+}
+
+func TestProofMath(t *testing.T) {
+	for formula, want := range map[string]string{
+		"lo*lo <= n ^ n < hi*hi":                "𝑙𝑜² ≤ 𝑛 ∧ 𝑛 < ℎ𝑖²",
+		"x * x*x >= 0 ^ y*x*x = a/x*x":          "𝑥³ ≥ 0 ∧ 𝑦 · 𝑥² = 𝑎/𝑥 · 𝑥",
+		"n < (r+1)*(r+1) ^ (i+1)*i = f(x)*(x)":  "𝑛 < (𝑟 + 1)² ∧ (𝑖 + 1) · 𝑖 = 𝑓(𝑥) · (𝑥)",
+		"Forall k in [0, n) : (k)*(k) >= 0":     "∀𝑘 ∈ [0, 𝑛) : (𝑘)² ≥ 0",
+		"f*f(x) + A*A[i] + x*xs + x'*x'":        "𝑓 · 𝑓(𝑥) + 𝐴 · 𝐴[𝑖] + 𝑥 · 𝑥𝑠 + 𝑥′ · 𝑥′",
+		"at = -1 v 0 <= at < |A|":               "𝑎𝑡 = −1 ∨ 0 ≤ 𝑎𝑡 < |𝐴|",
+		"v >= 0 v v' <> v":                      "𝑣 ≥ 0 ∨ 𝑣′ ≠ 𝑣",
+		"~found -> x <> A[:]":                   "¬𝑓𝑜𝑢𝑛𝑑 → 𝑥 ≠ 𝐴[:]",
+		"Forall k in [0, |A|) : A[k] <> x":      "∀𝑘 ∈ [0, |𝐴|) : 𝐴[𝑘] ≠ 𝑥",
+		"Exists k in Z : a <-> b && c || !d":    "∃𝑘 ∈ ℤ : 𝑎 ↔ 𝑏 ∧ 𝑐 ∨ ¬𝑑",
+		"Sorted(A) ::= A[0:n) <= m":             "𝑆𝑜𝑟𝑡𝑒𝑑(𝐴) ≔ 𝐴[0:𝑛) ≤ 𝑚",
+		"q * d + A[i] % d = A[i] ^ ret_0 == 1":  "𝑞 · 𝑑 + 𝐴[𝑖] mod 𝑑 = 𝐴[𝑖] ∧ 𝑟𝑒𝑡_0 = 1",
+		"s.OutCol <= c ^ c <= s.OutCol + s.Len": "𝑠.𝑂𝑢𝑡𝐶𝑜𝑙 ≤ 𝑐 ∧ 𝑐 ≤ 𝑠.𝑂𝑢𝑡𝐶𝑜𝑙 + 𝑠.𝐿𝑒𝑛",
+		"Forall k in [0, ...) : k >= 0":         "∀𝑘 ∈ [0, ∞) : 𝑘 ≥ 0",
+		"":                                      "",
+	} {
+		if got := proofMath(formula, AnalyzeOptions{}); got != want {
+			t.Errorf("proofMath(%q) = %q, want %q", formula, got, want)
+		}
+	}
+	// The item covers the formula and nothing else, so that the keyword stays.
+	d := Parse("t.lit.md", []byte("```go\n\t//@ Invariant lo <= hi  \n\t//@ a ^ b\n\t// @ Ensures b\n\t//@   c\n```\n"))
+	var got []string
+	for _, it := range d.Analyze(AnalyzeOptions{}).Items {
+		if it.Kind == "vego-math" {
+			got = append(got, fmt.Sprintf("%d:%d-%d %s", it.Line, it.Col, it.EndCol, it.Text))
+		}
+	}
+	want := []string{"1:15-23 𝑙𝑜 ≤ ℎ𝑖", "2:5-10 𝑎 ∧ 𝑏", "3:14-15 𝑏", "4:7-8 𝑐"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("items = %q, want %q", got, want)
 	}
 }
 
@@ -6329,11 +6679,4503 @@ func TestWeaveForHTML(t *testing.T) {
 }
 ```
 
+# Proofs
+
+A test says that a program did the right thing the times somebody looked. A
+proof says that it does the right thing every time. For a long while only the
+first was practical, and the reason was never the checking, which a machine
+does. It was writing down *what* to check: the precondition, the invariant of
+every loop, the quantity that shrinks. That is the part a coding agent is good
+at proposing and a person is good at reading, and a literate program is the
+natural place for it, because the argument for why a loop is right is exactly
+what the prose around the loop was trying to say anyway.
+
+[VeGo](https://arxiv.org/abs/2608.22630) (Verified Go, by Tina Massoudi and
+Chris Dutchyn) is a notation for that argument. The specifications are
+comments that start with `//@`, so an annotated program is still plain Go: it
+compiles, runs and formats the way it did before. litgo reads those comments
+and checks them.
+
+<!-- notangle -->
+```go
+//@ Requires n >= 0 ^ d > 0
+func Divide(n, d int) (q, r int) {
+	r = n
+	//@ Invariant n = q*d + r ^ r >= 0
+	//@ Variant r
+	for r >= d {
+		q, r = q+1, r-d
+	}
+	return q, r
+}
+//@ Ensures n = q*d + r ^ 0 <= r < d
+```
+
+```mermaid
+flowchart LR
+    doc[prog.lit.md] -->|tangle, in memory| go[annotated Go]
+    go -->|walk every path| vcs[proof obligations]
+    vcs -->|refute| prover[arithmetic prover]
+    prover -->|not proved, at a line of the Markdown| doc
+```
+
+The paper's own checker, `vegop`, has not been published, so litgo has one of
+its own, in this chapter. It follows the paper's design in the ways that
+matter: it runs natively in Go with no SMT solver behind it, it works through
+a function one assignment at a time, giving every assignment a new name the
+way SSA form does, and it settles its verification conditions with
+Fourier-Motzkin elimination over linear integer arithmetic.
+
+It is a deductive verifier, and two properties are worth stating plainly.
+
+* **It is sound and incomplete, on purpose.** "Proved" means that the
+  hypotheses and the negated goal were shown to have no model. Everything the
+  prover does on the way (instantiating a quantifier at a few terms, treating
+  `x*y` as an unknown of its own, giving up when a budget runs out) can only
+  make it fail to find a proof, never find a wrong one. So the two answers are
+  *proved* and *not proved*, and "not proved" sometimes means "true, but say
+  more in the invariant".
+* **It refuses what it does not understand.** The fragment is integers,
+  booleans, slices of integers that are read but not written, integer fields
+  of structs, `if`, `for`, `range`, `break`, `continue`, `return`, and calls
+  of other annotated functions. A function with annotations that steps outside
+  that fragment is reported as *not verified*, with the statement that was too
+  much. An unchecked contract is worse than none.
+
+What a proof covers: every `Ensures` on every path to every `return`; every
+`Invariant`, on entry and around the loop; termination, where a `Variant` or a
+`Measure` is given; every index within its slice and every divisor not zero;
+the `Requires` of every call. What it does not cover: integers are the
+mathematical ones, so overflow is out of sight, as it is in the paper; and a
+`nil` pointer to a struct is not considered.
+
+A function without annotations is not looked at, so a program can be verified
+one function at a time.
+
+## What there is to say
+
+<!-- file: internal/vego/vego.go -->
+<!-- package: vego -->
+<!-- imports: fmt, go/ast, go/parser, go/token, path/filepath, sort, strings, github.com/tlehman/litgo/internal/lit -->
+
+| Annotation | Where | Meaning |
+|:--|:--|:--|
+| `Requires P` | above a function | The callers owe `P`; the body may assume it. |
+| `Ensures Q` | under the closing brace | Holds at every `return`. A parameter means its value on entry, the results their final values. |
+| `Exsures X` | under the closing brace | A state that no `return` can be in: `~X` is proved. |
+| `Invariant I` | above a loop, or at the end of its body | Holds on entry and after every iteration, and is all that is known after the loop, with the negated condition. |
+| `Variant e` | with the invariant | An integer that is never negative while the loop runs and gets smaller every time round. |
+| `Measure e` | above a recursive function, or in it | The same, for recursion: smaller at every recursive call. |
+| `BaseCase c` | in a body | No recursive call is reachable once `c` has held. |
+| `InductionHypothesis P`, `Assert P`, or just `P` | in a body | Proved there, and known from there on. |
+| `Preserves P` | in a body | Proved there and again after every assignment until the block ends. A loop inside the block may assume it. |
+| `Axiom P` | in a body | Assumed without proof, with a warning every time. |
+| `Predicate N(a, b) ::= P` | anywhere | A name for a formula. |
+
+The paper's `.vgo` dialect also has a `while` keyword, a `skip` statement and
+functions declared inside functions. None of those is Go, and a litgo block
+has to be Go, so they are left out; `for cond {}`, an empty statement and a
+separate function say the same things. `Property` and contracts on interface
+methods are read but not checked, and say so.
+
+```go
+// Marker starts a comment that is a VeGo annotation.
+const Marker = "//@"
+
+// Source is a Go file to verify.
+type Source struct {
+	Path string
+	Text []byte
+}
+
+// Pos is a 0-based position in a Source.
+type Pos struct {
+	Path      string
+	Line, Col int
+}
+
+// Finding is something the verifier has to say. Ref, when it has a Path, is a
+// second position; the message mentions it as {ref}.
+type Finding struct {
+	Pos
+	EndCol  int
+	Warning bool
+	Message string
+	Ref     Pos
+}
+
+// Summary counts what a verification did.
+type Summary struct {
+	Functions   int // functions with annotations
+	Proved      int // of which every obligation was proved
+	Obligations int
+	Names       []string // the proved functions
+}
+```
+
+An annotation is one `//@` comment. A formula that is too long for a line goes
+on in the next comment, under the rule Go uses for semicolons: a line that ends
+in something that cannot end a formula (an operator, an opening bracket) is not
+finished.
+
+```go
+// annot is one annotation: a //@ comment, with the lines that continue it.
+type annot struct {
+	kind    string
+	text    string // the formula
+	e       *expr
+	pos     token.Pos
+	where   Pos
+	endCol  int
+	textCol int // where the formula starts on the line
+	first   int // how much of the formula is on that line
+	lines   int // how many comment lines it takes
+	used    bool
+}
+
+// Annotated reports whether a Go file has annotations at all, which is what
+// decides whether verifying it is worth the time.
+func Annotated(text []byte) bool {
+	return strings.Contains(string(text), Marker) || strings.Contains(string(text), "// @ ")
+}
+```
+
+`Prove` is the door the rest of litgo comes in by. It takes what a document
+tangles to, in memory, and answers in the document's own lines, which is the
+source map's job as always. A position mentioned inside a message (the
+`return` a postcondition failed for, say) is translated too. A document's Go
+files are verified a directory at a time, because a contract in one file is
+used by calls in another.
+
+```go
+// Prove verifies the annotated Go a document tangles to, and reports at the
+// document's own lines. Nothing is written, so it works on a buffer.
+func Prove(res *lit.Result) ([]lit.Diag, Summary) {
+	var total Summary
+	if res.HasErrors() {
+		return nil, total
+	}
+	packages := map[string][]*lit.Output{}
+	var dirs []string
+	for _, o := range res.Files {
+		if o.File.Lang != "go" || strings.HasSuffix(o.Path, "_test.go") {
+			continue
+		}
+		dir := filepath.Dir(o.Path)
+		if packages[dir] == nil {
+			dirs = append(dirs, dir)
+		}
+		packages[dir] = append(packages[dir], o)
+	}
+	var diags []lit.Diag
+	seen := map[string]bool{}
+	for _, dir := range dirs {
+		var sources []Source
+		outputs := map[string]*lit.Output{}
+		annotated := false
+		for _, o := range packages[dir] {
+			text := o.Bytes()
+			annotated = annotated || Annotated(text)
+			sources = append(sources, Source{o.Path, text})
+			outputs[o.Path] = o
+		}
+		if !annotated {
+			continue
+		}
+		findings, sum := Verify(sources)
+		total.Functions += sum.Functions
+		total.Proved += sum.Proved
+		total.Obligations += sum.Obligations
+		total.Names = append(total.Names, sum.Names...)
+		for _, f := range findings {
+			o := outputs[f.Path]
+			line, col, _, ok := o.Map(f.Line, f.Col)
+			if !ok {
+				continue
+			}
+			d := lit.Diag{File: res.Doc.Path, Line: line, Col: col, Severity: lit.SevError, Message: f.Message, Source: "vego"}
+			if f.Warning {
+				d.Severity = lit.SevWarning
+			}
+			if f.EndCol > f.Col {
+				d.EndCol = col + f.EndCol - f.Col
+			}
+			if f.Ref.Path != "" {
+				if l, _, _, ok := outputs[f.Ref.Path].Map(f.Ref.Line, f.Ref.Col); ok {
+					d.Message = strings.ReplaceAll(d.Message, "{ref}", fmt.Sprintf("line %d", l+1))
+				}
+			}
+			// A chunk that is used twice is verified twice, and fails twice.
+			key := fmt.Sprintf("%d:%d:%s", d.Line, d.Col, d.Message)
+			if !seen[key] {
+				seen[key] = true
+				diags = append(diags, d)
+			}
+		}
+	}
+	return diags, total
+}
+```
+
+`Verify` is the same thing without the Markdown, for one package of Go. A
+function counts as proved when verifying it reported no error. Warnings (an
+`Axiom`, a loop without a `Variant`) do not take a proof away, they qualify
+it.
+
+```go
+// Verify checks every annotated function of one package.
+func Verify(sources []Source) ([]Finding, Summary) {
+	v := &verifier{fset: token.NewFileSet(), funcs: map[string]*fn{}, structs: map[string]map[string]string{},
+		consts: map[string]int64{}, preds: map[string]*predicate{}, reported: map[string]bool{}}
+	for _, s := range sources {
+		f, err := parser.ParseFile(v.fset, s.Path, s.Text, parser.ParseComments|parser.SkipObjectResolution)
+		if err != nil {
+			continue // the syntax check has more to say about it than we do
+		}
+		v.files = append(v.files, f)
+	}
+	for _, f := range v.files {
+		v.declarations(f)
+	}
+	for _, f := range v.files {
+		v.functions(f)
+	}
+	for _, f := range v.files {
+		v.annotations(f)
+	}
+	var sum Summary
+	for _, f := range v.ordered {
+		if !f.annotated {
+			continue
+		}
+		sum.Functions++
+		before := v.errors
+		v.verify(f)
+		sum.Obligations += f.obligations
+		if v.errors == before && !f.broken {
+			sum.Proved++
+			sum.Names = append(sum.Names, f.key)
+		}
+	}
+	for _, a := range v.all {
+		if !a.used && a.e != nil {
+			v.report(a.where, a.endCol, false, a.kind+" is not attached to anything: Requires goes above a function, Ensures below it, Invariant and Variant at a loop")
+		}
+	}
+	sort.SliceStable(v.findings, func(i, j int) bool {
+		a, b := v.findings[i], v.findings[j]
+		if a.Path != b.Path {
+			return a.Path < b.Path
+		}
+		return a.Line < b.Line
+	})
+	return v.findings, sum
+}
+```
+
+The verifier is syntactic. It never runs the type checker, because the types
+it can reason about are few enough to read off the declarations: the integer
+types, `bool`, `[]int`, and structs of the package, of which it uses the
+integer and boolean fields.
+
+```go
+type vkind int
+
+const (
+	kNone vkind = iota
+	kInt
+	kBool
+	kSlice
+	kStruct
+)
+
+type param struct {
+	name string
+	kind vkind
+	typ  string // the struct's name, for kStruct
+}
+
+// fn is a function of the package, with its contract.
+type fn struct {
+	key         string // name, or Type.name for a method
+	decl        *ast.FuncDecl
+	recv        *param
+	params      []param
+	results     []param
+	requires    []*annot
+	ensures     []*annot
+	exsures     []*annot
+	measure     []*annot
+	inside      []*annot // the annotations in the body
+	annotated   bool
+	broken      bool // an annotation of it does not parse
+	obligations int
+}
+
+type verifier struct {
+	fset       *token.FileSet
+	files      []*ast.File
+	funcs      map[string]*fn
+	ordered    []*fn
+	structs    map[string]map[string]string
+	consts     map[string]int64
+	preds      map[string]*predicate
+	all        []*annot
+	findings   []Finding
+	reported   map[string]bool
+	errors     int
+	fresh      int
+	parseFresh int
+}
+```
+
+```go
+func (v *verifier) position(p token.Pos) Pos {
+	pp := v.fset.Position(p)
+	return Pos{pp.Filename, pp.Line - 1, pp.Column - 1}
+}
+
+func (v *verifier) report(at Pos, endCol int, warning bool, msg string) {
+	v.reportRef(at, endCol, warning, msg, Pos{})
+}
+
+// reportRef reports once per place and message: a contract that fails on
+// three paths is still one problem.
+func (v *verifier) reportRef(at Pos, endCol int, warning bool, msg string, ref Pos) {
+	key := fmt.Sprintf("%s:%d:%d:%s", at.Path, at.Line, at.Col, msg)
+	if v.reported[key] {
+		return
+	}
+	v.reported[key] = true
+	if !warning {
+		v.errors++
+	}
+	v.findings = append(v.findings, Finding{Pos: at, EndCol: endCol, Warning: warning, Message: msg, Ref: ref})
+}
+```
+
+```go
+// kindOf reads a type the way the verifier sees it: integers, booleans,
+// slices of integers, and structs declared in the package.
+func (v *verifier) kindOf(t ast.Expr) (vkind, string) {
+	switch t := t.(type) {
+	case *ast.Ident:
+		switch t.Name {
+		case "int", "int8", "int16", "int32", "int64":
+			return kInt, ""
+		case "bool":
+			return kBool, ""
+		}
+		if _, ok := v.structs[t.Name]; ok {
+			return kStruct, t.Name
+		}
+	case *ast.StarExpr:
+		if k, name := v.kindOf(t.X); k == kStruct {
+			return k, name
+		}
+	case *ast.ArrayType:
+		if k, _ := v.kindOf(t.Elt); t.Len == nil && k == kInt {
+			return kSlice, ""
+		}
+	case *ast.ParenExpr:
+		return v.kindOf(t.X)
+	}
+	return kNone, ""
+}
+
+// declarations notes the structs and the integer constants.
+func (v *verifier) declarations(f *ast.File) {
+	for _, d := range f.Decls {
+		g, ok := d.(*ast.GenDecl)
+		if !ok {
+			continue
+		}
+		for _, spec := range g.Specs {
+			switch s := spec.(type) {
+			case *ast.TypeSpec:
+				if st, ok := s.Type.(*ast.StructType); ok {
+					fields := map[string]string{}
+					for _, fl := range st.Fields.List {
+						for _, n := range fl.Names {
+							fields[n.Name] = typeText(fl.Type)
+						}
+					}
+					v.structs[s.Name.Name] = fields
+				}
+			case *ast.ValueSpec:
+				if g.Tok != token.CONST {
+					continue
+				}
+				for i, n := range s.Names {
+					if i < len(s.Values) {
+						if c, ok := constInt(s.Values[i]); ok {
+							v.consts[n.Name] = c
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// functions notes the functions, once every struct they may mention is known.
+func (v *verifier) functions(f *ast.File) {
+	for _, d := range f.Decls {
+		fd, ok := d.(*ast.FuncDecl)
+		if !ok || fd.Body == nil {
+			continue
+		}
+		f := &fn{key: fd.Name.Name, decl: fd}
+		if fd.Recv != nil && len(fd.Recv.List) == 1 {
+			r := fd.Recv.List[0]
+			k, typ := v.kindOf(r.Type)
+			name := "_"
+			if len(r.Names) == 1 {
+				name = r.Names[0].Name
+			}
+			f.recv = &param{name, k, typ}
+			f.key = strings.TrimPrefix(typeText(r.Type), "*") + "." + f.key
+		}
+		f.params = v.fields(fd.Type.Params, "")
+		f.results = v.fields(fd.Type.Results, "ret_")
+		v.funcs[f.key] = f
+		v.ordered = append(v.ordered, f)
+	}
+}
+
+func (v *verifier) fields(list *ast.FieldList, unnamed string) []param {
+	var out []param
+	if list == nil {
+		return nil
+	}
+	for _, fl := range list.List {
+		k, typ := v.kindOf(fl.Type)
+		if len(fl.Names) == 0 {
+			out = append(out, param{fmt.Sprintf("%s%d", unnamed, len(out)), k, typ})
+		}
+		for _, n := range fl.Names {
+			out = append(out, param{n.Name, k, typ})
+		}
+	}
+	return out
+}
+
+func typeText(t ast.Expr) string {
+	switch t := t.(type) {
+	case *ast.Ident:
+		return t.Name
+	case *ast.StarExpr:
+		return "*" + typeText(t.X)
+	case *ast.ArrayType:
+		if t.Len == nil {
+			return "[]" + typeText(t.Elt)
+		}
+	}
+	return "?"
+}
+
+func constInt(e ast.Expr) (int64, bool) {
+	switch e := e.(type) {
+	case *ast.BasicLit:
+		if e.Kind == token.INT {
+			var v int64
+			if _, err := fmt.Sscan(e.Value, &v); err == nil {
+				return v, true
+			}
+		}
+	case *ast.UnaryExpr:
+		if c, ok := constInt(e.X); ok && e.Op == token.SUB {
+			return -c, true
+		}
+	case *ast.ParenExpr:
+		return constInt(e.X)
+	}
+	return 0, false
+}
+```
+
+Where an annotation stands decides whose it is. `Requires` belongs to the
+function below it, and `Ensures` to the function above it, which is where VeGo
+puts it: a postcondition reads best after the code, the way a conclusion does.
+An `Ensures` written in the doc comment of a function, with its `Requires`, is
+accepted too. Annotations inside a body wait there until the walk through the
+body reaches them.
+
+gofmt has opinions about comments, and an annotation has to survive them,
+because code gets formatted on save whether anyone thinks about annotations or
+not. There are two. In a doc comment, gofmt puts a space after the slashes, so
+`//@ Requires` above a function comes back as `// @ Requires`. And it puts a
+blank line between a closing brace and a comment under it, so an `Ensures`
+comes loose from its function. Neither changes what the annotation means
+here: `// @` followed by a keyword is read as `//@`, and an `Ensures` looks
+upward past blank lines. (`lit.ProofComment`, which decides what is an
+annotation, is in [Finding the annotations](#finding-the-annotations), because
+the editor's highlighting asks the same question.)
+
+```go
+// annotations reads a file's //@ comments, parses them, and hands each to the
+// function it belongs to.
+func (v *verifier) annotations(f *ast.File) {
+	var list []*annot
+	for _, group := range f.Comments {
+		var open *annot // an annotation whose formula is not finished
+		for _, c := range group.List {
+			body, ok := lit.ProofComment(c.Text, open != nil)
+			if !ok {
+				open = nil
+				continue
+			}
+			if open != nil {
+				open.text += " " + strings.TrimSpace(body)
+				open.lines++
+				if !continues(body) {
+					open = nil
+				}
+				continue
+			}
+			rest := strings.TrimLeft(body, " \t")
+			a := &annot{kind: "Assert", pos: c.Pos(), where: v.position(c.Pos()), lines: 1}
+			a.endCol = a.where.Col + len(c.Text)
+			word, after, _ := strings.Cut(rest, " ")
+			if lit.ProofKeywords[word] {
+				a.kind = word
+				rest = strings.TrimLeft(after, " \t")
+			}
+			a.text = strings.TrimSpace(rest)
+			a.first = len(a.text)
+			a.textCol = a.where.Col + len(c.Text) - len(rest)
+			list = append(list, a)
+			if continues(body) {
+				open = a
+			}
+		}
+	}
+	for _, a := range list {
+		v.parse(a)
+	}
+	v.all = append(v.all, list...)
+
+	var decls []*fn
+	for _, fd := range v.ordered {
+		if v.fset.File(fd.decl.Pos()) == v.fset.File(f.Pos()) {
+			decls = append(decls, fd)
+		}
+	}
+	for _, a := range list {
+		if a.kind == "Predicate" {
+			a.used = true
+			continue
+		}
+		if v.inType(f, a) {
+			v.report(a.where, a.endCol, true, "litgo prove does not check contracts on interface methods")
+			a.used = true
+			continue
+		}
+		var inside, before, after *fn
+		for _, fd := range decls {
+			switch {
+			case a.pos > fd.decl.Body.Lbrace && a.pos < fd.decl.Body.Rbrace:
+				inside = fd
+			case fd.decl.End() <= a.pos:
+				before = fd
+			case a.pos < fd.decl.Pos() && after == nil:
+				after = fd
+			}
+		}
+		// An Ensures belongs to the function above it, unless it is part of
+		// the doc comment of the function below and does not touch the one above.
+		if after != nil && after.decl.Doc != nil && a.pos >= after.decl.Doc.Pos() && a.pos < after.decl.Doc.End() &&
+			!(before != nil && v.adjacent(before, a, list)) {
+			before = nil
+		}
+		var owner *fn
+		switch a.kind {
+		case "Requires":
+			if owner = after; inside != nil {
+				owner = nil
+			}
+			if owner != nil {
+				owner.requires = append(owner.requires, a)
+			}
+		case "Ensures", "Exsures":
+			if inside == nil {
+				if owner = before; owner == nil {
+					owner = after
+				}
+			}
+			if owner != nil && a.kind == "Ensures" {
+				owner.ensures = append(owner.ensures, a)
+			} else if owner != nil {
+				owner.exsures = append(owner.exsures, a)
+			}
+		case "Measure":
+			if owner = inside; owner == nil {
+				owner = after
+			}
+			if owner != nil {
+				owner.measure = append(owner.measure, a)
+			}
+		case "Property":
+			v.report(a.where, a.endCol, true, "litgo prove does not check Property annotations")
+			a.used = true
+			continue
+		default:
+			if owner = inside; owner != nil {
+				owner.inside = append(owner.inside, a)
+			}
+		}
+		if owner != nil {
+			owner.annotated = true
+			owner.broken = owner.broken || a.e == nil
+			if a.kind != "Requires" && a.kind != "Ensures" && a.kind != "Exsures" && a.kind != "Measure" {
+				continue // the body marks its own as used, when it reaches them
+			}
+			a.used = true
+		}
+	}
+}
+```
+
+```go
+// inType reports whether an annotation is written inside a type declaration,
+// which is where VeGo puts the contract of an interface method.
+func (v *verifier) inType(f *ast.File, a *annot) bool {
+	for _, d := range f.Decls {
+		if g, ok := d.(*ast.GenDecl); ok && g.Tok == token.TYPE && a.pos > g.Pos() && a.pos < g.End() {
+			return true
+		}
+	}
+	return false
+}
+
+// adjacent reports whether nothing but annotations lies between the end of a
+// function and an annotation below it.
+func (v *verifier) adjacent(f *fn, a *annot, list []*annot) bool {
+	line := v.position(f.decl.End()).Line
+	for _, b := range list {
+		if b.where.Line == line+1 && b.pos > f.decl.End() {
+			line += b.lines
+			if b == a {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (v *verifier) parse(a *annot) {
+	var err error
+	switch a.kind {
+	case "Predicate":
+		var p *predicate
+		if p, err = parsePredicate(a.text, &v.parseFresh); err == nil {
+			v.preds[p.name] = p
+			a.e = p.body
+		}
+	case "Immutable":
+		a.e = eTrue
+	default:
+		a.e, err = parseFormula(a.text, &v.parseFresh)
+		number := a.kind == "Variant" || a.kind == "Measure"
+		if err == nil && a.e.op != opCall && isBool(a.e) == number {
+			a.e = nil
+			err = &syntaxError{0, "this has to be a formula, something that is true or false"}
+			if number {
+				err = &syntaxError{0, "this has to be an integer expression, something that can get smaller"}
+			}
+		}
+	}
+	if se, ok := err.(*syntaxError); ok {
+		at := a.where
+		at.Col = a.textCol + min(se.pos, a.first)
+		v.report(at, a.endCol, false, "in this "+a.kind+": "+se.msg)
+	}
+}
+```
+
+## The language of formulas
+
+<!-- file: internal/vego/logic.go -->
+<!-- package: vego -->
+<!-- imports: fmt, sort, strconv, strings -->
+
+Formulas are written the way they are on a blackboard, in ASCII:
+
+| | |
+|:--|:--|
+| `^`  `v`  `~`  `->`  `<-`  `<->` | and, or, not, implies, is implied by, if and only if |
+| `=`  `<>`  `<`  `<=`  `>`  `>=` | comparisons, which chain: `0 <= i < n` (`==` and `!=` work too) |
+| `+`  `-`  `*`  `/`  `%` | integer arithmetic, with Go's division |
+| `len(A)`, `A[i]` | the length and the elements of a slice |
+| `Forall k in [a, b) : P`, `Exists`, `Unique` | quantifiers over an interval, with `[` `]` for an end that is included and `(` `)` for one that is not, `...` for no end at all, or over all of `Z` |
+| `A[a:b) <= m`, `m in A[a:b)` | every element of the range is at most `m`; some element is `m` |
+| `x'` | `x` after the assignment, where `x` is before it |
+
+The length of a slice can also be written `|A|`, and Go's `&&`, `||` and `!`
+are read as `^`, `v` and `~`, for the fingers that type them anyway.
+
+One type serves for terms, for formulas, and later for the symbolic values of
+program variables, so that a Go expression and an annotation can meet in the
+same formula.
+
+```go
+type op int
+
+const (
+	opNum op = iota
+	opVar
+	opTrue
+	opFalse
+	opAdd
+	opSub
+	opMul
+	opDiv
+	opMod
+	opNeg
+	opSel   // args: array, index
+	opLen   // args: array
+	opCall  // name(args): a predicate, or a Go function that is one expression
+	opRange // name[lo:hi) as one side of a comparison; args: lo, hi (nil when omitted)
+	opLt
+	opLe
+	opEq
+	opNe
+	opIn // x in A[lo:hi)
+	opAnd
+	opOr
+	opNot
+	opImp
+	opIff
+	opForall // name is the bound variable, args[0] the body
+	opExists
+)
+
+type sort_ int
+
+const (
+	sInt sort_ = iota
+	sBool
+	sArr
+)
+
+// expr is a term or a formula. Annotations parse to it, Go expressions are
+// translated to it, and the symbolic values of program variables are made of it.
+type expr struct {
+	op     op
+	val    int64
+	name   string
+	primes int
+	sort   sort_
+	args   []*expr
+	pos    int     // byte offset in the annotation's text
+	open   [2]bool // opRange: is the low, the high end exclusive
+}
+```
+
+```go
+func num(v int64) *expr              { return &expr{op: opNum, val: v} }
+func sym(name string, s sort_) *expr { return &expr{op: opVar, name: name, sort: s} }
+func mk(o op, args ...*expr) *expr   { return &expr{op: o, args: args} }
+
+var (
+	eTrue  = &expr{op: opTrue}
+	eFalse = &expr{op: opFalse}
+)
+
+func and(a, b *expr) *expr {
+	if a.op == opTrue {
+		return b
+	}
+	if b.op == opTrue {
+		return a
+	}
+	return mk(opAnd, a, b)
+}
+
+func not(a *expr) *expr { return mk(opNot, a) }
+
+func conj(list []*expr) *expr {
+	out := eTrue
+	for _, e := range list {
+		out = and(out, e)
+	}
+	return out
+}
+
+// isBool says whether e is a formula rather than an integer term.
+func isBool(e *expr) bool {
+	switch e.op {
+	case opTrue, opFalse, opLt, opLe, opEq, opNe, opIn, opAnd, opOr, opNot, opImp, opIff, opForall, opExists:
+		return true
+	case opVar:
+		return e.sort == sBool
+	}
+	return false
+}
+```
+
+```go
+func (e *expr) String() string {
+	bin := map[op]string{opAdd: "+", opSub: "-", opMul: "*", opDiv: "/", opMod: "%", opLt: "<", opLe: "<=",
+		opEq: "=", opNe: "<>", opAnd: "^", opOr: "v", opImp: "->", opIff: "<->", opIn: "in"}
+	switch e.op {
+	case opNum:
+		return strconv.FormatInt(e.val, 10)
+	case opVar:
+		return e.name + strings.Repeat("'", e.primes)
+	case opTrue:
+		return "true"
+	case opFalse:
+		return "false"
+	case opNeg:
+		return "-" + e.args[0].String()
+	case opNot:
+		return "~" + e.args[0].String()
+	case opSel:
+		return e.args[0].String() + "[" + e.args[1].String() + "]"
+	case opLen:
+		return "|" + e.args[0].String() + "|"
+	case opCall:
+		parts := make([]string, len(e.args))
+		for i, a := range e.args {
+			parts[i] = a.String()
+		}
+		return e.name + "(" + strings.Join(parts, ", ") + ")"
+	case opRange:
+		return e.name + "[:]"
+	case opForall, opExists:
+		q := "Forall "
+		if e.op == opExists {
+			q = "Exists "
+		}
+		return "(" + q + e.name + " : " + e.args[0].String() + ")"
+	}
+	return "(" + e.args[0].String() + " " + bin[e.op] + " " + e.args[1].String() + ")"
+}
+```
+
+Everything that is done to a formula (giving names their values, unfolding a
+predicate, instantiating a quantifier) is a substitution, and the one thing a
+substitution must not do is touch a variable that a quantifier binds.
+
+```go
+// rewrite rebuilds e bottom-up. f sees every variable that is not bound by a
+// quantifier inside e, and returns its replacement or nil to keep it.
+func rewrite(e *expr, f func(v *expr) *expr) *expr {
+	return rewriteBound(e, f, nil)
+}
+
+func rewriteBound(e *expr, f func(v *expr) *expr, bound []string) *expr {
+	if e == nil {
+		return nil
+	}
+	switch e.op {
+	case opNum, opTrue, opFalse:
+		return e
+	case opVar:
+		for _, b := range bound {
+			if b == e.name && e.primes == 0 {
+				return e
+			}
+		}
+		if r := f(e); r != nil {
+			return r
+		}
+		return e
+	}
+	c := *e
+	c.args = make([]*expr, len(e.args))
+	if e.op == opForall || e.op == opExists {
+		bound = append(bound[:len(bound):len(bound)], e.name)
+	}
+	for i, a := range e.args {
+		c.args[i] = rewriteBound(a, f, bound)
+	}
+	return &c
+}
+
+// subst replaces the free variable name by r.
+func subst(e *expr, name string, r *expr) *expr {
+	return rewrite(e, func(v *expr) *expr {
+		if v.name == name && v.primes == 0 {
+			return r
+		}
+		return nil
+	})
+}
+
+// A predicate is a named formula with parameters; using it means its body.
+type predicate struct {
+	name   string
+	params []string
+	body   *expr
+}
+```
+
+### Reading a formula
+
+The letter `v` is *or* when it stands where an operator can stand, and a
+variable anywhere else, so a program can still have a variable called `v`. A
+name may have dots in it, which is how `s.Len` is one name, and primes after
+it.
+
+```go
+type lexeme struct {
+	kind string // "num", "id", "op", "eof"
+	text string
+	pos  int
+}
+
+type syntaxError struct {
+	pos int
+	msg string
+}
+
+func (e *syntaxError) Error() string { return e.msg }
+
+var operators = []string{"<->", "::=", "...", "->", "<-", "<=", ">=", "<>", "==", "!=", "&&", "||",
+	"^", "~", "!", "=", "<", ">", "+", "-", "*", "/", "%", "(", ")", "[", "]", ",", ":", "|"}
+
+func lex(s string) ([]lexeme, error) {
+	var out []lexeme
+	for i := 0; i < len(s); {
+		c := s[i]
+		switch {
+		case c == ' ' || c == '\t':
+			i++
+		case c >= '0' && c <= '9':
+			j := i
+			for j < len(s) && s[j] >= '0' && s[j] <= '9' {
+				j++
+			}
+			out = append(out, lexeme{"num", s[i:j], i})
+			i = j
+		case c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z':
+			j := i
+			for j < len(s) && (s[j] == '_' || s[j] == '.' && j+1 < len(s) && s[j+1] != '.' || s[j] >= 'a' && s[j] <= 'z' || s[j] >= 'A' && s[j] <= 'Z' || s[j] >= '0' && s[j] <= '9') {
+				j++
+			}
+			for j < len(s) && s[j] == '\'' {
+				j++
+			}
+			out = append(out, lexeme{"id", s[i:j], i})
+			i = j
+		default:
+			found := false
+			for _, o := range operators {
+				if strings.HasPrefix(s[i:], o) {
+					out = append(out, lexeme{"op", o, i})
+					i += len(o)
+					found = true
+					break
+				}
+			}
+			if !found {
+				return nil, &syntaxError{i, fmt.Sprintf("unexpected %q", string(c))}
+			}
+		}
+	}
+	return append(out, lexeme{"eof", "", len(s)}), nil
+}
+```
+
+```go
+// continues reports whether an annotation line ends in a token that cannot
+// end a formula, which is how a formula says it goes on on the next line.
+func continues(text string) bool {
+	toks, err := lex(text)
+	if err != nil || len(toks) < 2 {
+		return false
+	}
+	last := toks[len(toks)-2]
+	if last.kind == "id" {
+		return last.text == "v" || last.text == "in"
+	}
+	if last.kind != "op" {
+		return false
+	}
+	switch last.text {
+	case ")", "]", "...", "|":
+		return false
+	}
+	return true
+}
+```
+
+The parser is recursive descent, one function for each level of binding
+strength, loosest first: `<->`, then `->`, `v`, `^`, `~`, the comparisons, and
+the arithmetic. A syntax error is a panic that carries its column and is
+caught at the top, so that the error lands under the character that caused
+it.
+
+```go
+type reader struct {
+	toks  []lexeme
+	i     int
+	fresh *int
+}
+
+func (p *reader) peek() lexeme { return p.toks[p.i] }
+func (p *reader) next() lexeme {
+	t := p.toks[p.i]
+	if t.kind != "eof" {
+		p.i++
+	}
+	return t
+}
+
+func (p *reader) is(text string) bool {
+	t := p.peek()
+	return t.kind == "op" && t.text == text
+}
+
+func (p *reader) isWord(text string) bool {
+	t := p.peek()
+	return t.kind == "id" && t.text == text
+}
+
+func (p *reader) fail(t lexeme, format string, args ...any) {
+	panic(&syntaxError{t.pos, fmt.Sprintf(format, args...)})
+}
+
+func (p *reader) expect(text string) {
+	if t := p.next(); t.kind != "op" || t.text != text {
+		what := t.text
+		if t.kind == "eof" {
+			what = "the end of the annotation"
+		}
+		p.fail(t, "expected %q, found %s", text, what)
+	}
+}
+
+// parseFormula parses a whole annotation body.
+func parseFormula(text string, fresh *int) (e *expr, err error) {
+	toks, err := lex(text)
+	if err != nil {
+		return nil, err
+	}
+	p := &reader{toks: toks, fresh: fresh}
+	defer func() {
+		if r := recover(); r != nil {
+			se, ok := r.(*syntaxError)
+			if !ok {
+				panic(r)
+			}
+			e, err = nil, se
+		}
+	}()
+	e = p.iff()
+	if t := p.peek(); t.kind != "eof" {
+		p.fail(t, "unexpected %q", t.text)
+	}
+	return e, nil
+}
+
+// parsePredicate parses "Name(a, b) ::= body".
+func parsePredicate(text string, fresh *int) (pr *predicate, err error) {
+	toks, err := lex(text)
+	if err != nil {
+		return nil, err
+	}
+	p := &reader{toks: toks, fresh: fresh}
+	defer func() {
+		if r := recover(); r != nil {
+			se, ok := r.(*syntaxError)
+			if !ok {
+				panic(r)
+			}
+			pr, err = nil, se
+		}
+	}()
+	name := p.next()
+	if name.kind != "id" {
+		p.fail(name, "a predicate needs a name")
+	}
+	pr = &predicate{name: name.text}
+	p.expect("(")
+	for !p.is(")") {
+		t := p.next()
+		if t.kind != "id" {
+			p.fail(t, "expected a parameter name")
+		}
+		pr.params = append(pr.params, t.text)
+		if !p.is(")") {
+			p.expect(",")
+		}
+	}
+	p.expect(")")
+	p.expect("::=")
+	pr.body = p.iff()
+	if t := p.peek(); t.kind != "eof" {
+		p.fail(t, "unexpected %q", t.text)
+	}
+	return pr, nil
+}
+```
+
+```go
+func (p *reader) iff() *expr {
+	l := p.imp()
+	for p.is("<->") {
+		t := p.next()
+		l = &expr{op: opIff, args: []*expr{l, p.imp()}, pos: t.pos}
+	}
+	return l
+}
+
+func (p *reader) imp() *expr {
+	l := p.or()
+	if p.is("->") {
+		t := p.next()
+		return &expr{op: opImp, args: []*expr{l, p.imp()}, pos: t.pos}
+	}
+	if p.is("<-") {
+		t := p.next()
+		return &expr{op: opImp, args: []*expr{p.imp(), l}, pos: t.pos}
+	}
+	return l
+}
+
+func (p *reader) or() *expr {
+	l := p.and()
+	for p.isWord("v") || p.is("||") {
+		t := p.next()
+		l = &expr{op: opOr, args: []*expr{l, p.and()}, pos: t.pos}
+	}
+	return l
+}
+
+func (p *reader) and() *expr {
+	l := p.neg()
+	for p.is("^") || p.is("&&") {
+		t := p.next()
+		l = &expr{op: opAnd, args: []*expr{l, p.neg()}, pos: t.pos}
+	}
+	return l
+}
+
+func (p *reader) neg() *expr {
+	if p.is("~") || p.is("!") {
+		t := p.next()
+		return &expr{op: opNot, args: []*expr{p.neg()}, pos: t.pos}
+	}
+	if p.isWord("Forall") || p.isWord("Exists") || p.isWord("Unique") {
+		return p.quantifier()
+	}
+	return p.comparison()
+}
+```
+
+A chain of comparisons is the conjunction of its links. A comparison with a
+range of a slice on one side is a quantifier in disguise, and the parser takes
+the disguise off: `A[0:i) <= m` becomes `Forall k : 0 <= k < i -> A[k] <= m`,
+and `m in A[0:i)` becomes an `Exists`.
+
+```go
+var comparisons = map[string]bool{"=": true, "==": true, "<>": true, "!=": true, "<": true, "<=": true, ">": true, ">=": true}
+
+// comparison parses a chain: 0 <= i < n means 0 <= i and i < n.
+func (p *reader) comparison() *expr {
+	l := p.sum()
+	var out *expr
+	for {
+		t := p.peek()
+		in := t.kind == "id" && t.text == "in"
+		if !in && !(t.kind == "op" && comparisons[t.text]) {
+			break
+		}
+		p.next()
+		r := p.sum()
+		c := p.compare(t, l, r)
+		if out == nil {
+			out = c
+		} else {
+			out = &expr{op: opAnd, args: []*expr{out, c}, pos: t.pos}
+		}
+		l = r
+	}
+	if out == nil {
+		if l.op == opRange {
+			p.fail(p.peek(), "a range like %s[a:b) can only be compared with something", l.name)
+		}
+		return l
+	}
+	return out
+}
+
+func (p *reader) compare(t lexeme, l, r *expr) *expr {
+	if l.op == opRange || r.op == opRange {
+		return p.overRange(t, l, r)
+	}
+	switch t.text {
+	case "=", "==":
+		if isBool(l) || isBool(r) {
+			return &expr{op: opIff, args: []*expr{l, r}, pos: t.pos}
+		}
+		return &expr{op: opEq, args: []*expr{l, r}, pos: t.pos}
+	case "<>", "!=":
+		if isBool(l) || isBool(r) {
+			return &expr{op: opNot, args: []*expr{{op: opIff, args: []*expr{l, r}, pos: t.pos}}, pos: t.pos}
+		}
+		return &expr{op: opNe, args: []*expr{l, r}, pos: t.pos}
+	case "<":
+		return &expr{op: opLt, args: []*expr{l, r}, pos: t.pos}
+	case "<=":
+		return &expr{op: opLe, args: []*expr{l, r}, pos: t.pos}
+	case ">":
+		return &expr{op: opLt, args: []*expr{r, l}, pos: t.pos}
+	case ">=":
+		return &expr{op: opLe, args: []*expr{r, l}, pos: t.pos}
+	}
+	p.fail(t, "%q needs a range like A[a:b) on its right", t.text)
+	return nil
+}
+
+// overRange turns a comparison with A[lo:hi) into a quantifier over a fresh
+// index: an order comparison holds for all elements, = and in for some.
+func (p *reader) overRange(t lexeme, l, r *expr) *expr {
+	if l.op == opRange && r.op == opRange {
+		p.fail(t, "only one side of a comparison can be a range")
+	}
+	rng := r
+	if l.op == opRange {
+		rng = l
+	}
+	*p.fresh++
+	idx := &expr{op: opVar, name: fmt.Sprintf("_idx%d", *p.fresh)}
+	elem := &expr{op: opSel, args: []*expr{{op: opVar, name: rng.name, sort: sArr}, idx}}
+	lo, hi := rng.args[0], rng.args[1]
+	if lo == nil {
+		lo = num(0)
+	}
+	if hi == nil {
+		hi = &expr{op: opLen, args: []*expr{{op: opVar, name: rng.name, sort: sArr}}}
+	}
+	within := mk(opAnd, mk(bound(rng.open[0]), lo, idx), mk(bound(rng.open[1]), idx, hi))
+	if rng.args[1] == nil {
+		within.args[1] = mk(opLt, idx, hi)
+	}
+	if t.text == "in" || t.text == "=" || t.text == "==" {
+		other := l
+		if l.op == opRange {
+			other = r
+		}
+		return &expr{op: opExists, name: idx.name, args: []*expr{mk(opAnd, within, mk(opEq, other, elem))}, pos: t.pos}
+	}
+	if t.text == "<>" || t.text == "!=" {
+		other := l
+		if l.op == opRange {
+			other = r
+		}
+		return &expr{op: opForall, name: idx.name, args: []*expr{mk(opImp, within, mk(opNe, other, elem))}, pos: t.pos}
+	}
+	var c *expr
+	if l.op == opRange {
+		c = p.compare(t, elem, r)
+	} else {
+		c = p.compare(t, l, elem)
+	}
+	return &expr{op: opForall, name: idx.name, args: []*expr{mk(opImp, within, c)}, pos: t.pos}
+}
+
+func bound(open bool) op {
+	if open {
+		return opLt
+	}
+	return opLe
+}
+```
+
+```go
+func (p *reader) sum() *expr {
+	l := p.product()
+	for p.is("+") || p.is("-") {
+		t := p.next()
+		o := opAdd
+		if t.text == "-" {
+			o = opSub
+		}
+		l = &expr{op: o, args: []*expr{l, p.product()}, pos: t.pos}
+	}
+	return l
+}
+
+func (p *reader) product() *expr {
+	l := p.unary()
+	for p.is("*") || p.is("/") || p.is("%") {
+		t := p.next()
+		o := map[string]op{"*": opMul, "/": opDiv, "%": opMod}[t.text]
+		l = &expr{op: o, args: []*expr{l, p.unary()}, pos: t.pos}
+	}
+	return l
+}
+
+func (p *reader) unary() *expr {
+	if p.is("-") {
+		t := p.next()
+		return &expr{op: opNeg, args: []*expr{p.unary()}, pos: t.pos}
+	}
+	return p.primary()
+}
+
+func (p *reader) primary() *expr {
+	t := p.next()
+	switch {
+	case t.kind == "num":
+		v, err := strconv.ParseInt(t.text, 10, 64)
+		if err != nil {
+			p.fail(t, "%s is too large", t.text)
+		}
+		return &expr{op: opNum, val: v, pos: t.pos}
+	case t.kind == "op" && t.text == "(":
+		e := p.iff()
+		p.expect(")")
+		return e
+	case t.kind == "op" && t.text == "|":
+		a := p.next()
+		if a.kind != "id" {
+			p.fail(a, "|…| takes the name of a slice")
+		}
+		p.expect("|")
+		return &expr{op: opLen, args: []*expr{{op: opVar, name: a.text, sort: sArr, pos: a.pos}}, pos: t.pos}
+	case t.kind == "id":
+		return p.named(t)
+	case t.kind == "eof":
+		p.fail(t, "the formula stops short")
+	}
+	p.fail(t, "unexpected %q", t.text)
+	return nil
+}
+```
+
+```go
+// named parses what starts with an identifier: a variable, true, len(A),
+// A[i], a range A[a:b), or P(x, y).
+func (p *reader) named(t lexeme) *expr {
+	name := strings.TrimRight(t.text, "'")
+	primes := len(t.text) - len(name)
+	switch name {
+	case "true":
+		return &expr{op: opTrue, pos: t.pos}
+	case "false":
+		return &expr{op: opFalse, pos: t.pos}
+	case "Forall", "Exists", "Unique", "in":
+		p.fail(t, "%s cannot be used as a name", name)
+	}
+	v := &expr{op: opVar, name: name, primes: primes, pos: t.pos}
+	if p.is("[") {
+		p.next()
+		if r := p.rangeAfter(v, false); r != nil {
+			return r
+		}
+		idx := p.sum()
+		if p.is(":") {
+			p.next()
+			return p.rangeEnd(v, idx, false)
+		}
+		p.expect("]")
+		v.sort = sArr
+		return &expr{op: opSel, args: []*expr{v, idx}, pos: t.pos}
+	}
+	if p.is("(") {
+		p.next()
+		if r := p.rangeAfter(v, true); r != nil {
+			return r
+		}
+		var args []*expr
+		for !p.is(")") {
+			a := p.iff()
+			if len(args) == 0 && p.is(":") {
+				p.next()
+				return p.rangeEnd(v, a, true)
+			}
+			args = append(args, a)
+			if !p.is(")") {
+				p.expect(",")
+			}
+		}
+		p.expect(")")
+		if name == "len" && len(args) == 1 && args[0].op == opVar {
+			args[0].sort = sArr
+			return &expr{op: opLen, args: args, pos: t.pos}
+		}
+		return &expr{op: opCall, name: name, args: args, pos: t.pos}
+	}
+	return v
+}
+
+// rangeAfter handles A[:b) and A[:], where the low end is left out.
+func (p *reader) rangeAfter(v *expr, open bool) *expr {
+	if !p.is(":") {
+		return nil
+	}
+	p.next()
+	return p.rangeEnd(v, nil, open)
+}
+
+func (p *reader) rangeEnd(v, lo *expr, open bool) *expr {
+	r := &expr{op: opRange, name: v.name, args: []*expr{lo, nil}, pos: v.pos}
+	r.open[0] = open
+	if !p.is("]") && !p.is(")") {
+		r.args[1] = p.sum()
+	}
+	t := p.next()
+	switch {
+	case t.kind == "op" && t.text == ")":
+		r.open[1] = true
+	case t.kind == "op" && t.text == "]":
+	default:
+		p.fail(t, "a range ends in ] or )")
+	}
+	return r
+}
+```
+
+A quantifier's domain is folded into its body, as the hypothesis of a `Forall`
+and as a conjunct of an `Exists`, so that past this point a quantifier ranges
+over all integers and there is one kind of each. `Unique x : P(x)` says that
+some `x` makes `P` true and that anything that makes `P` true is that `x`.
+
+```go
+// quantifier parses Forall x in D : body. The body reaches as far as it can.
+func (p *reader) quantifier() *expr {
+	q := p.next()
+	x := p.next()
+	if x.kind != "id" || strings.HasSuffix(x.text, "'") {
+		p.fail(x, "%s needs a variable", q.text)
+	}
+	if !p.isWord("in") {
+		p.fail(p.peek(), "expected \"in\" and a domain, as in %s %s in [0, n) : …", q.text, x.text)
+	}
+	p.next()
+	v := &expr{op: opVar, name: x.text}
+	within := p.domain(v)
+	p.expect(":")
+	body := p.iff()
+	switch q.text {
+	case "Forall":
+		if within != nil {
+			body = mk(opImp, within, body)
+		}
+		return &expr{op: opForall, name: x.text, args: []*expr{body}, pos: q.pos}
+	case "Exists":
+		if within != nil {
+			body = mk(opAnd, within, body)
+		}
+		return &expr{op: opExists, name: x.text, args: []*expr{body}, pos: q.pos}
+	}
+	// Unique x: some x makes the body true, and whatever makes it true is x.
+	if within != nil {
+		body = mk(opAnd, within, body)
+	}
+	*p.fresh++
+	other := fmt.Sprintf("_u%d", *p.fresh)
+	same := &expr{op: opForall, name: other, args: []*expr{
+		mk(opImp, subst(body, x.text, &expr{op: opVar, name: other}), mk(opEq, &expr{op: opVar, name: other}, v))}}
+	return &expr{op: opExists, name: x.text, args: []*expr{mk(opAnd, body, same)}, pos: q.pos}
+}
+
+// domain parses Z or an interval, and returns what it says about v.
+func (p *reader) domain(v *expr) *expr {
+	t := p.next()
+	if t.kind == "id" && t.text == "Z" {
+		return nil
+	}
+	if t.kind == "id" && t.text == "B" {
+		p.fail(t, "litgo prove quantifies over integers only")
+	}
+	if t.kind != "op" || t.text != "[" && t.text != "(" {
+		p.fail(t, "expected a domain: Z, or an interval like [0, n)")
+	}
+	var parts []*expr
+	if p.is("...") {
+		p.next()
+	} else {
+		parts = append(parts, mk(bound(t.text == "("), p.sum(), v))
+	}
+	p.expect(",")
+	if p.is("...") {
+		p.next()
+		if c := p.next(); c.kind != "op" || c.text != ")" && c.text != "]" {
+			p.fail(c, "an interval ends in ] or )")
+		}
+	} else {
+		hi := p.sum()
+		c := p.next()
+		if c.kind != "op" || c.text != ")" && c.text != "]" {
+			p.fail(c, "an interval ends in ] or )")
+		}
+		parts = append(parts, mk(bound(c.text == ")"), v, hi))
+	}
+	return conj(parts)
+}
+```
+
+```go
+// names lists the free variables of e, sorted.
+func names(e *expr) []string {
+	seen := map[string]bool{}
+	rewrite(e, func(v *expr) *expr {
+		seen[v.name] = true
+		return nil
+	})
+	out := make([]string, 0, len(seen))
+	for n := range seen {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
+```
+
+## Walking a function
+
+<!-- file: internal/vego/verify.go -->
+<!-- package: vego -->
+<!-- imports: fmt, go/ast, go/token, sort, strings -->
+
+The verifier executes a function symbolically. A parameter starts out as a
+symbol that stands for any value at all. An assignment does not change a
+value, it gives the variable a new one and keeps the old, which is what SSA
+form does with its subscripts, and it is also exactly what the primes of an
+annotation need: in a formula that mentions `x'`, the `x'` is the value now
+and the `x` is the one before.
+
+A path through the function is a `state`: what every variable holds, and the
+formulas known to be true on the way here, which are the hypotheses of
+whatever has to be proved next.
+
+```go
+// binding is a program variable on one path: its kind, and every value it
+// has had since it was declared or since the loop around it was cut. The
+// last one is its value now; the ones before are what primes reach for.
+type binding struct {
+	kind vkind
+	typ  string
+	hist []*expr
+}
+
+// state is one path through a function: what the variables hold, and what is
+// known to be true.
+type state struct {
+	vars      map[string]*binding
+	scopes    []map[string]*binding // what each open block shadowed
+	hyps      []*expr
+	preserved []kept
+	base      []*expr // the BaseCase conditions passed so far
+}
+
+type kept struct {
+	a     *annot
+	depth int
+}
+
+func (s *state) clone() *state {
+	c := &state{vars: make(map[string]*binding, len(s.vars)), hyps: s.hyps[:len(s.hyps):len(s.hyps)],
+		preserved: s.preserved[:len(s.preserved):len(s.preserved)], base: s.base[:len(s.base):len(s.base)]}
+	for n, b := range s.vars {
+		c.vars[n] = &binding{b.kind, b.typ, append([]*expr{}, b.hist...)}
+	}
+	for _, sc := range s.scopes {
+		m := make(map[string]*binding, len(sc))
+		for n, b := range sc {
+			m[n] = b
+		}
+		c.scopes = append(c.scopes, m)
+	}
+	return c
+}
+```
+
+Blocks have scopes, and a variable declared in an inner block can hide one
+outside. Each open block remembers what it hid, and puts it back when it
+closes.
+
+```go
+func (s *state) push() { s.scopes = append(s.scopes, map[string]*binding{}) }
+
+func (s *state) pop() {
+	top := s.scopes[len(s.scopes)-1]
+	s.scopes = s.scopes[:len(s.scopes)-1]
+	for n, old := range top {
+		for f := range s.vars {
+			if strings.HasPrefix(f, n+".") {
+				delete(s.vars, f)
+			}
+		}
+		if old == nil {
+			delete(s.vars, n)
+		} else {
+			s.vars[n] = old
+		}
+	}
+	for len(s.preserved) > 0 && s.preserved[len(s.preserved)-1].depth > len(s.scopes) {
+		s.preserved = s.preserved[:len(s.preserved)-1]
+	}
+}
+
+func (s *state) popTo(depth int) {
+	for len(s.scopes) > depth {
+		s.pop()
+	}
+}
+
+func (s *state) declare(name string, b *binding) {
+	if name == "_" {
+		return
+	}
+	if top := s.scopes[len(s.scopes)-1]; top != nil {
+		if _, ok := top[name]; !ok {
+			top[name] = s.vars[name]
+		}
+	}
+	for f := range s.vars {
+		if strings.HasPrefix(f, name+".") {
+			delete(s.vars, f)
+		}
+	}
+	s.vars[name] = b
+}
+```
+
+An `if` splits a path in two, and both go on. So a statement does not leave one
+state behind but several, sorted by how they left: by falling out of the
+bottom, by `break`, or by `continue`. A `return` leaves none, because
+everything that has to hold at a return is proved right there.
+
+```go
+// outcomes are the states a statement leaves behind, by how it was left.
+// A return leaves none: its obligations are settled on the spot.
+type outcomes struct {
+	normal, brk, cont []*state
+}
+
+func (o *outcomes) add(p outcomes) {
+	o.normal = append(o.normal, p.normal...)
+	o.brk = append(o.brk, p.brk...)
+	o.cont = append(o.cont, p.cont...)
+}
+```
+
+```go
+// run verifies one function.
+type run struct {
+	v        *verifier
+	f        *fn
+	entry    map[string]*expr // the parameters' values on entry
+	blocks   map[*ast.BlockStmt][]*annot
+	measure0 []*expr
+	paths    int
+	depth    int // of one-line functions being unfolded
+}
+
+// unsupported is how the verifier backs out of a function it cannot follow.
+type unsupported struct {
+	pos token.Pos
+	msg string
+}
+
+func (r *run) no(n ast.Node, format string, args ...any) {
+	panic(unsupported{n.Pos(), fmt.Sprintf(format, args...)})
+}
+
+const maxPaths = 400
+```
+
+Verifying a function starts with its parameters as unknowns and its
+precondition as the first hypothesis. Go gives named results their zero values,
+so the proof knows them too.
+
+```go
+func (v *verifier) verify(f *fn) {
+	r := &run{v: v, f: f, entry: map[string]*expr{}, blocks: map[*ast.BlockStmt][]*annot{}}
+	defer func() {
+		if p := recover(); p != nil {
+			u, ok := p.(unsupported)
+			if !ok {
+				// A bug in the verifier. The editor is on the other end of this,
+				// so say so at the function instead of taking the server down.
+				u = unsupported{f.decl.Name.Pos(), fmt.Sprintf("the verifier failed (%v); please report this", p)}
+			}
+			at := v.position(u.pos)
+			v.report(at, 0, false, fmt.Sprintf("%s is not verified: %s", f.key, u.msg))
+		}
+	}()
+	r.place()
+	st := &state{vars: map[string]*binding{}}
+	st.push()
+	all := append([]param{}, f.params...)
+	if f.recv != nil {
+		all = append(all, *f.recv)
+	}
+	for _, p := range all {
+		if p.kind == kNone && p.name != "_" {
+			// Whatever it is, the proof cannot mention it.
+			continue
+		}
+		b := &binding{kind: p.kind, typ: p.typ}
+		if p.kind != kStruct {
+			b.hist = []*expr{r.fresh(p.name, p.kind)}
+			r.entry[p.name] = b.hist[0]
+		}
+		st.declare(p.name, b)
+	}
+	for _, p := range f.results {
+		if p.kind != kInt && p.kind != kBool {
+			r.no(f.decl, "its result %s is neither an integer nor a boolean", p.name)
+		}
+		zero := num(0)
+		if p.kind == kBool {
+			zero = eFalse
+		}
+		st.declare(p.name, &binding{kind: p.kind, hist: []*expr{zero}})
+	}
+	for _, a := range f.requires {
+		if a.e != nil {
+			st.hyps = append(st.hyps, r.formula(st, a, false))
+		}
+	}
+	for _, a := range f.measure {
+		if a.e != nil {
+			r.measure0 = append(r.measure0, r.formula(st, a, false))
+		}
+	}
+	r.lint()
+	if r.recursive() && len(f.measure) == 0 {
+		v.report(v.position(f.decl.Name.Pos()), 0, true, f.key+" calls itself and has no Measure, so nothing shows that it terminates")
+	}
+	out := r.block(st, f.decl.Body)
+	for _, s := range out.normal {
+		r.leave(s, f.decl.Body.Rbrace)
+	}
+}
+```
+
+```go
+// place sorts the annotations of the body into the blocks they are written in.
+func (r *run) place() {
+	for _, a := range r.f.inside {
+		var inner *ast.BlockStmt
+		ast.Inspect(r.f.decl.Body, func(n ast.Node) bool {
+			if b, ok := n.(*ast.BlockStmt); ok && a.pos > b.Lbrace && a.pos < b.Rbrace {
+				inner = b
+			}
+			return true
+		})
+		if inner != nil {
+			r.blocks[inner] = append(r.blocks[inner], a)
+		}
+	}
+}
+
+// lint points at contracts that say nothing.
+func (r *run) lint() {
+	for _, list := range [][]*annot{r.f.requires, r.f.ensures} {
+		for _, a := range list {
+			if a.e != nil && a.e.op == opTrue {
+				r.v.report(a.where, a.endCol, true, a.kind+" true says nothing")
+			}
+		}
+	}
+}
+
+func (r *run) recursive() bool {
+	found := false
+	ast.Inspect(r.f.decl.Body, func(n ast.Node) bool {
+		if c, ok := n.(*ast.CallExpr); ok {
+			if callee, _ := r.callee(nil, c); callee == r.f {
+				found = true
+			}
+		}
+		return true
+	})
+	return found
+}
+
+func (r *run) fresh(name string, k vkind) *expr {
+	r.v.fresh++
+	s := sInt
+	if k == kBool {
+		s = sBool
+	} else if k == kSlice {
+		s = sArr
+	}
+	return sym(fmt.Sprintf("%s#%d", name, r.v.fresh), s)
+}
+```
+
+### Obligations
+
+Everything the verifier proves goes through `check`: the hypotheses of the path
+on one side, a goal on the other. A failure is reported at the annotation that
+was not proved, and mentions the place in the code it was not proved for. An
+obligation that comes from the code itself, like an index, is reported at the
+code.
+
+```go
+// check is one proof obligation. It reports at the annotation, or at a
+// place in the code, and mentions a second place if there is one.
+func (r *run) check(st *state, goal *expr, a *annot, at ast.Node, ref ast.Node, msg string) bool {
+	r.f.obligations++
+	if proves(st.hyps, goal) {
+		return true
+	}
+	where, end := Pos{}, 0
+	if a != nil {
+		where, end = a.where, a.endCol
+	} else {
+		where = r.v.position(at.Pos())
+		end = where.Col + int(at.End()-at.Pos())
+	}
+	var rp Pos
+	if ref != nil {
+		rp = r.v.position(ref.Pos())
+	}
+	r.v.reportRef(where, end, false, msg, rp)
+	return false
+}
+
+func (r *run) assume(st *state, f *expr) { st.hyps = append(st.hyps, f) }
+
+// feasible reports whether a path can be taken at all. Pruning the ones that
+// cannot keeps their obligations from being reported as failures of logic.
+func (r *run) feasible(st *state) bool { return !proves(st.hyps, eFalse) }
+```
+
+### What a formula means at a point in the program
+
+A formula is written in the program's names, and what it says depends on where
+it stands. Here the names get their values. With primes, the most-primed
+mention of a variable is its value now, and each prime fewer is one assignment
+earlier, so after `x = x + 1` the formula `x' = x + 1` says what the assignment
+did. A postcondition is different: there a parameter without a prime is the
+value the caller passed, whatever the body did to its copy.
+
+```go
+// formula gives an annotation's formula its meaning in a state: predicates
+// and one-line functions unfolded, names replaced by values. In a
+// postcondition a parameter means its value on entry, and primed, its value
+// at the end.
+func (r *run) formula(st *state, a *annot, post bool) *expr {
+	e := r.unfold(st, a, a.e, 0)
+	most := map[string]int{}
+	var count func(e *expr)
+	count = func(e *expr) {
+		if e == nil {
+			return
+		}
+		if e.op == opVar {
+			most[e.name] = max(most[e.name], e.primes)
+		}
+		for _, x := range e.args {
+			count(x)
+		}
+	}
+	count(e)
+	return rewrite(e, func(v *expr) *expr {
+		if strings.ContainsAny(v.name, "#?") {
+			return nil
+		}
+		if old, ok := r.entry[v.name]; ok && post {
+			if v.primes == 0 {
+				return old
+			}
+			return r.lookup(st, a, v.name, 0)
+		}
+		return r.lookup(st, a, v.name, most[v.name]-v.primes)
+	})
+}
+
+// lookup finds the value a name had `back` assignments ago.
+func (r *run) lookup(st *state, a *annot, name string, back int) *expr {
+	b := r.binding(st, name)
+	if b == nil {
+		if c, ok := r.v.consts[name]; ok {
+			return num(c)
+		}
+		r.bad(a, "%s is not a variable here", name)
+	}
+	if b.kind == kStruct || len(b.hist) == 0 {
+		r.bad(a, "%s is not an integer, a boolean or a slice of integers", name)
+	}
+	if back >= len(b.hist) {
+		r.bad(a, "%s has not been assigned often enough on this path for that many primes", name)
+	}
+	return b.hist[len(b.hist)-1-back]
+}
+```
+
+```go
+// binding finds a variable, or makes one for the field of a struct the
+// first time it is mentioned. Nothing in the fragment assigns to a field, so
+// a field holds one value throughout.
+func (r *run) binding(st *state, name string) *binding {
+	if b := st.vars[name]; b != nil {
+		return b
+	}
+	base, field, ok := strings.Cut(name, ".")
+	if !ok {
+		return nil
+	}
+	s := st.vars[base]
+	if s == nil || s.kind != kStruct {
+		return nil
+	}
+	var k vkind
+	switch r.v.structs[s.typ][field] {
+	case "int", "int8", "int16", "int32", "int64":
+		k = kInt
+	case "bool":
+		k = kBool
+	case "[]int":
+		k = kSlice
+	default:
+		return nil
+	}
+	b := &binding{kind: k, hist: []*expr{r.fresh(name, k)}}
+	st.vars[name] = b
+	return b
+}
+
+// bad gives up on an annotation that does not make sense.
+func (r *run) bad(a *annot, format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	if a == nil {
+		panic(unsupported{r.f.decl.Pos(), msg})
+	}
+	r.v.report(a.where, a.endCol, false, "in this "+a.kind+": "+msg)
+	panic(unsupported{r.f.decl.Name.Pos(), "one of its annotations does not make sense"})
+}
+```
+
+A predicate is unfolded into its body. So is a call of a Go function whose
+whole body is `return` and one expression, which makes small Go functions
+usable as vocabulary: a contract can say `s.src(c) = col` and mean it about
+the real `src`. A function with more to it than that cannot be used this way,
+because a formula needs a value and such a function might not even return.
+
+```go
+// unfold replaces P(x, y) by what it stands for: the body of a predicate, or
+// the expression a one-line Go function returns.
+func (r *run) unfold(st *state, a *annot, e *expr, depth int) *expr {
+	if e == nil {
+		return nil
+	}
+	if depth > 12 {
+		r.bad(a, "%s is defined in terms of itself", e.name)
+	}
+	c := *e
+	c.args = make([]*expr, len(e.args))
+	for i, x := range e.args {
+		c.args[i] = r.unfold(st, a, x, depth)
+	}
+	if e.op != opCall {
+		return &c
+	}
+	if p := r.v.preds[e.name]; p != nil {
+		if len(p.params) != len(c.args) {
+			r.bad(a, "%s takes %d arguments", p.name, len(p.params))
+		}
+		return r.unfold(st, a, replace(p.body, p.params, c.args, "", ""), depth+1)
+	}
+	callee, recv := r.named(st, e.name)
+	if callee == nil {
+		r.bad(a, "%s is neither a predicate nor a function of this package", e.name)
+	}
+	body := r.oneLine(callee)
+	if body == nil {
+		r.bad(a, "%s cannot be used in a formula: only a function whose body is one return of one expression can", e.name)
+	}
+	if len(callee.params) != len(c.args) {
+		r.bad(a, "%s takes %d arguments", e.name, len(callee.params))
+	}
+	var formals []string
+	for _, p := range callee.params {
+		formals = append(formals, p.name)
+	}
+	from := ""
+	if callee.recv != nil {
+		from = callee.recv.name
+	}
+	return r.unfold(st, a, replace(body, formals, c.args, from, recv), depth+1)
+}
+
+// replace substitutes all the parameters at once, and renames the fields of
+// the callee's receiver to fields of the caller's.
+func replace(body *expr, formals []string, actuals []*expr, from, to string) *expr {
+	return rewrite(body, func(v *expr) *expr {
+		for i, f := range formals {
+			if v.name == f && v.primes == 0 {
+				return actuals[i]
+			}
+		}
+		if from != "" && strings.HasPrefix(v.name, from+".") {
+			c := *v
+			c.name = to + strings.TrimPrefix(v.name, from)
+			return &c
+		}
+		return nil
+	})
+}
+
+// named finds the function a formula or a call mentions: f, or x.m where x
+// is a struct.
+func (r *run) named(st *state, name string) (*fn, string) {
+	if f := r.v.funcs[name]; f != nil && f.recv == nil {
+		return f, ""
+	}
+	if i := strings.LastIndex(name, "."); i > 0 && st != nil {
+		if b := st.vars[name[:i]]; b != nil && b.kind == kStruct {
+			return r.v.funcs[b.typ+name[i:]], name[:i]
+		}
+	}
+	return nil, ""
+}
+
+// oneLine is the expression a function returns, if that is all it does.
+func (r *run) oneLine(f *fn) *expr {
+	if len(f.decl.Body.List) != 1 || len(f.results) != 1 || len(f.inside) > 0 {
+		return nil
+	}
+	ret, ok := f.decl.Body.List[0].(*ast.ReturnStmt)
+	if !ok || len(ret.Results) != 1 {
+		return nil
+	}
+	kinds := map[string]vkind{}
+	for _, p := range f.params {
+		kinds[p.name] = p.kind
+	}
+	var e *expr
+	func() {
+		defer func() {
+			if p := recover(); p != nil {
+				if _, ok := p.(unsupported); !ok {
+					panic(p)
+				}
+				e = nil
+			}
+		}()
+		e = r.pure(ret.Results[0], func(name string) vkind {
+			if k, ok := kinds[name]; ok {
+				return k
+			}
+			if f.recv != nil && strings.HasPrefix(name, f.recv.name+".") {
+				if r.v.structs[f.recv.typ][strings.TrimPrefix(name, f.recv.name+".")] == "bool" {
+					return kBool
+				}
+			}
+			return kInt
+		})
+	}()
+	return e
+}
+```
+
+### Go expressions
+
+A Go expression is read in two steps. `pure` translates the syntax into a term
+over the program's names, and remembers for every part where it came from.
+`eval` then gives the names their values and, on the way, states what has to be
+true for the expression to be evaluated at all.
+
+```go
+// pure reads a Go expression as a term over the names it mentions. It
+// checks nothing yet; pos remembers where each part came from.
+func (r *run) pure(e ast.Expr, kind func(string) vkind) *expr {
+	at := func(x *expr) *expr { x.pos = int(e.Pos()); return x }
+	switch e := e.(type) {
+	case *ast.ParenExpr:
+		return r.pure(e.X, kind)
+	case *ast.BasicLit:
+		if c, ok := constInt(e); ok {
+			return at(num(c))
+		}
+	case *ast.Ident:
+		switch e.Name {
+		case "true":
+			return eTrue
+		case "false":
+			return eFalse
+		}
+		s := sInt
+		if kind(e.Name) == kBool {
+			s = sBool
+		} else if kind(e.Name) == kSlice {
+			s = sArr
+		}
+		return at(sym(e.Name, s))
+	case *ast.SelectorExpr:
+		if x, ok := e.X.(*ast.Ident); ok {
+			name := x.Name + "." + e.Sel.Name
+			s := sInt
+			if kind(name) == kBool {
+				s = sBool
+			} else if kind(name) == kSlice {
+				s = sArr
+			}
+			return at(sym(name, s))
+		}
+	case *ast.UnaryExpr:
+		x := r.pure(e.X, kind)
+		switch e.Op {
+		case token.SUB:
+			return at(mk(opNeg, x))
+		case token.ADD:
+			return x
+		case token.NOT:
+			return at(mk(opNot, x))
+		}
+	case *ast.BinaryExpr:
+		l, rt := r.pure(e.X, kind), r.pure(e.Y, kind)
+		switch e.Op {
+		case token.ADD:
+			return at(mk(opAdd, l, rt))
+		case token.SUB:
+			return at(mk(opSub, l, rt))
+		case token.MUL:
+			return at(mk(opMul, l, rt))
+		case token.QUO:
+			return at(mk(opDiv, l, rt))
+		case token.REM:
+			return at(mk(opMod, l, rt))
+		case token.LAND:
+			return at(mk(opAnd, l, rt))
+		case token.LOR:
+			return at(mk(opOr, l, rt))
+		case token.LSS:
+			return at(mk(opLt, l, rt))
+		case token.LEQ:
+			return at(mk(opLe, l, rt))
+		case token.GTR:
+			return at(mk(opLt, rt, l))
+		case token.GEQ:
+			return at(mk(opLe, rt, l))
+		case token.EQL, token.NEQ:
+			var c *expr
+			if isBool(l) || isBool(rt) {
+				c = mk(opIff, l, rt)
+			} else {
+				c = mk(opEq, l, rt)
+			}
+			if e.Op == token.NEQ {
+				c = mk(opNot, c)
+			}
+			return at(c)
+		}
+	case *ast.IndexExpr:
+		a := r.pure(e.X, kind)
+		if a.op == opVar {
+			a.sort = sArr
+			return at(mk(opSel, a, r.pure(e.Index, kind)))
+		}
+	case *ast.CallExpr:
+		name := ""
+		switch f := e.Fun.(type) {
+		case *ast.Ident:
+			name = f.Name
+		case *ast.SelectorExpr:
+			if x, ok := f.X.(*ast.Ident); ok {
+				name = x.Name + "." + f.Sel.Name
+			}
+		}
+		if name == "" {
+			break
+		}
+		var args []*expr
+		for _, x := range e.Args {
+			args = append(args, r.pure(x, kind))
+		}
+		if name == "len" && len(args) == 1 && args[0].op == opVar {
+			args[0].sort = sArr
+			return at(mk(opLen, args[0]))
+		}
+		if name == "int" && len(args) == 1 {
+			return args[0]
+		}
+		c := at(&expr{op: opCall, name: name, args: args})
+		return c
+	}
+	r.no(e, "this expression is outside what litgo prove understands (integers, booleans, slices of integers, fields of structs, calls of verified functions)")
+	return nil
+}
+```
+
+These are the safety obligations: an index is within its slice, a divisor is
+not zero, a callee's precondition holds. Go evaluates `&&` and `||` from the
+left and stops early, so the right side of `i < len(A) && A[i] > 0` is only
+obliged to be safe when the left side is true. The guards carry that.
+
+```go
+// value evaluates a Go expression in a state, and states what has to be
+// true for the evaluation to be safe: indices in range, divisors not zero,
+// the preconditions of what is called.
+func (r *run) value(st *state, e ast.Expr) *expr {
+	p := r.pure(e, func(name string) vkind {
+		if b := r.binding(st, name); b != nil {
+			return b.kind
+		}
+		return kNone
+	})
+	vals := r.eval(st, p, nil, e)
+	if len(vals) != 1 {
+		r.no(e, "a call with %d results cannot be used as a value", len(vals))
+	}
+	return vals[0]
+}
+
+// eval does the work of value. The guards are what is known at this point
+// of the expression and not before: the left side of an && while its right
+// side is being evaluated.
+func (r *run) eval(st *state, e *expr, guards []*expr, at ast.Node) []*expr {
+	one := func(x *expr) *expr {
+		vals := r.eval(st, x, guards, at)
+		if len(vals) != 1 {
+			r.no(at, "a call with %d results cannot be used as a value", len(vals))
+		}
+		return vals[0]
+	}
+	guarded := func(goal *expr) *expr {
+		if len(guards) == 0 {
+			return goal
+		}
+		return mk(opImp, conj(guards), goal)
+	}
+	here := ast.Node(at)
+	if e.pos != 0 {
+		here = point(e.pos)
+	}
+	switch e.op {
+	case opNum, opTrue, opFalse:
+		return []*expr{e}
+	case opVar:
+		if strings.ContainsAny(e.name, "#?") {
+			return []*expr{e}
+		}
+		b := r.binding(st, e.name)
+		if b == nil {
+			if c, ok := r.v.consts[e.name]; ok {
+				return []*expr{num(c)}
+			}
+			r.no(here, "%s is not a variable the proof can talk about", e.name)
+		}
+		if len(b.hist) == 0 {
+			r.no(here, "%s is a struct, and only its fields have values", e.name)
+		}
+		return []*expr{b.hist[len(b.hist)-1]}
+	case opAnd, opOr:
+		l := one(e.args[0])
+		g := l
+		if e.op == opOr {
+			g = not(l)
+		}
+		rt := r.eval(st, e.args[1], append(guards[:len(guards):len(guards)], g), at)
+		return []*expr{mk(e.op, l, rt[0])}
+	case opSel:
+		arr, idx := one(e.args[0]), one(e.args[1])
+		in := mk(opAnd, mk(opLe, num(0), idx), mk(opLt, idx, mk(opLen, arr)))
+		r.check(st, guarded(in), nil, here, nil, "the index may be out of range: 0 <= "+e.args[1].String()+" < len("+e.args[0].String()+") is not proved")
+		r.assume(st, guarded(in))
+		return []*expr{mk(opSel, arr, idx)}
+	case opDiv, opMod:
+		l, d := one(e.args[0]), one(e.args[1])
+		r.check(st, guarded(mk(opNe, d, num(0))), nil, here, nil, "the divisor may be zero: "+e.args[1].String()+" <> 0 is not proved")
+		r.assume(st, guarded(mk(opNe, d, num(0))))
+		return []*expr{mk(e.op, l, d)}
+	case opCall:
+		var args []*expr
+		for _, x := range e.args {
+			args = append(args, one(x))
+		}
+		return r.call(st, e, args, guards, here)
+	}
+	c := *e
+	c.args = make([]*expr, len(e.args))
+	for i, x := range e.args {
+		c.args[i] = one(x)
+	}
+	return []*expr{&c}
+}
+```
+
+```go
+// point is a position that stands in for a node.
+type point token.Pos
+
+func (p point) Pos() token.Pos { return token.Pos(p) }
+func (p point) End() token.Pos { return token.Pos(p) + 1 }
+
+// callee finds the declared function a call expression calls.
+func (r *run) callee(st *state, c *ast.CallExpr) (*fn, string) {
+	switch f := c.Fun.(type) {
+	case *ast.Ident:
+		if fn := r.v.funcs[f.Name]; fn != nil && fn.recv == nil {
+			return fn, ""
+		}
+	case *ast.SelectorExpr:
+		x, ok := f.X.(*ast.Ident)
+		if !ok {
+			return nil, ""
+		}
+		if st == nil { // asked only whether the function calls itself
+			if r.f.recv != nil && x.Name == r.f.recv.name && r.f.key == r.f.recv.typ+"."+f.Sel.Name {
+				return r.f, x.Name
+			}
+			return nil, ""
+		}
+		return r.named(st, x.Name+"."+f.Sel.Name)
+	}
+	return nil, ""
+}
+```
+
+A call is where verification is modular. The caller does not look inside the
+callee. It proves the callee's `Requires`, gets fresh unknowns for the results,
+and learns the callee's `Ensures` about them and nothing else. That is also
+what makes recursion work: inside `Triangle`, the call `Triangle(n-1)` is
+known by the very contract being proved, which is the induction hypothesis,
+and the `Measure` is what makes the induction well-founded.
+
+```go
+// call uses a function by its contract: the precondition is an obligation,
+// the postcondition is what is known about the results. A function that is
+// one expression is used as that expression, which says more.
+func (r *run) call(st *state, e *expr, args []*expr, guards []*expr, at ast.Node) []*expr {
+	switch e.name {
+	case "min", "max":
+		if len(args) != 2 || r.v.funcs[e.name] != nil {
+			break
+		}
+		m := r.fresh(e.name, kInt)
+		lo, hi := m, args[0]
+		lo2, hi2 := m, args[1]
+		if e.name == "max" {
+			lo, hi, lo2, hi2 = args[0], m, args[1], m
+		}
+		r.assume(st, conj([]*expr{mk(opLe, lo, hi), mk(opLe, lo2, hi2), mk(opOr, mk(opEq, m, args[0]), mk(opEq, m, args[1]))}))
+		return []*expr{m}
+	}
+	callee, recv := r.named(st, e.name)
+	if callee == nil {
+		r.no(at, "%s has no contract the proof could use; only functions of this package can be called", e.name)
+	}
+	if len(args) != len(callee.params) {
+		r.no(at, "%s takes %d arguments", e.name, len(callee.params))
+	}
+	if !callee.annotated && r.oneLine(callee) == nil {
+		// Nobody has checked what it does to the slices and structs it can reach.
+		r.no(at, "%s has no annotations, so nothing is known about what it does; give it a contract, even an empty one like Requires true", e.name)
+	}
+	guarded := func(goal *expr) *expr {
+		if len(guards) == 0 {
+			return goal
+		}
+		return mk(opImp, conj(guards), goal)
+	}
+	// The callee's formulas, in the caller's terms.
+	inst := func(a *annot, results []*expr) *expr {
+		if a.e == nil {
+			return eTrue
+		}
+		sub := &state{vars: map[string]*binding{}}
+		sub.push()
+		for i, p := range callee.params {
+			if p.kind == kNone {
+				continue
+			}
+			sub.vars[p.name] = &binding{kind: p.kind, typ: p.typ, hist: []*expr{args[i]}}
+			if results != nil && p.kind != kSlice {
+				// Primed, a parameter is the callee's own copy when it returned,
+				// and the caller knows nothing about that.
+				sub.vars[p.name].hist = []*expr{r.fresh(p.name, p.kind)}
+			}
+		}
+		if callee.recv != nil && callee.recv.kind == kStruct {
+			sub.vars[callee.recv.name] = &binding{kind: kStruct, typ: callee.recv.typ}
+			for field := range r.v.structs[callee.recv.typ] {
+				if b := r.binding(st, recv+"."+field); b != nil {
+					sub.vars[callee.recv.name+"."+field] = b
+				}
+			}
+		}
+		for i, p := range callee.results {
+			if results != nil {
+				sub.vars[p.name] = &binding{kind: p.kind, hist: []*expr{results[i]}}
+			}
+		}
+		inner := &run{v: r.v, f: callee, entry: map[string]*expr{}}
+		for i, p := range callee.params {
+			if p.kind != kNone && p.kind != kStruct {
+				inner.entry[p.name] = args[i]
+			}
+		}
+		defer func() {
+			// What goes wrong in the callee's annotation is the callee's problem.
+			if p := recover(); p != nil {
+				if _, ok := p.(unsupported); !ok {
+					panic(p)
+				}
+				r.no(at, "the contract of %s cannot be used here", e.name)
+			}
+		}()
+		return inner.formula(sub, a, results != nil)
+	}
+	for _, a := range callee.requires {
+		r.check(st, guarded(inst(a, nil)), nil, at, nil, fmt.Sprintf("this call does not establish what %s requires: %s", callee.key, a.text))
+	}
+	if callee == r.f {
+		r.descends(st, e, args, guards, at)
+	}
+	if body := r.oneLine(callee); body != nil {
+		if r.depth++; r.depth > 40 {
+			r.no(at, "%s never stops calling itself", callee.key)
+		}
+		defer func() { r.depth-- }()
+		var formals []string
+		for _, p := range callee.params {
+			formals = append(formals, p.name)
+		}
+		from := ""
+		if callee.recv != nil {
+			from = callee.recv.name
+		}
+		return r.eval(st, replace(body, formals, args, from, recv), guards, at)
+	}
+	var results []*expr
+	for _, p := range callee.results {
+		results = append(results, r.fresh(callee.decl.Name.Name+"."+p.name, p.kind))
+	}
+	for _, a := range callee.ensures {
+		r.assume(st, guarded(inst(a, results)))
+	}
+	for _, a := range callee.exsures {
+		r.assume(st, guarded(not(inst(a, results))))
+	}
+	return results
+}
+```
+
+```go
+// descends checks a recursive call: the measure is smaller than it was on
+// entry and was not negative, and no base case has been passed.
+func (r *run) descends(st *state, e *expr, args []*expr, guards []*expr, at ast.Node) {
+	guarded := func(goal *expr) *expr {
+		if len(guards) == 0 {
+			return goal
+		}
+		return mk(opImp, conj(guards), goal)
+	}
+	for i, a := range r.f.measure {
+		if a.e == nil {
+			continue
+		}
+		sub := &state{vars: map[string]*binding{}}
+		for j, p := range r.f.params {
+			if p.kind != kNone && p.kind != kStruct {
+				sub.vars[p.name] = &binding{kind: p.kind, hist: []*expr{args[j]}}
+			}
+		}
+		m := (&run{v: r.v, f: r.f, entry: map[string]*expr{}}).formula(sub, a, false)
+		r.check(st, guarded(mk(opLt, m, r.measure0[i])), a, nil, at, "Measure is not shown to get smaller in the recursive call at {ref}")
+		r.check(st, guarded(mk(opLe, num(0), r.measure0[i])), a, nil, at, "Measure can be negative when the recursive call at {ref} is made")
+	}
+	for _, b := range st.base {
+		r.check(st, guarded(not(b)), nil, at, nil, "this recursive call can be reached in the base case")
+	}
+}
+```
+
+### Statements
+
+A block is its statements, with the annotations that stand between them taken
+in order. `Invariant` and `Variant` are the exception: they are collected by
+the loop they belong to.
+
+```go
+// block runs the statements of a block, with the annotations between them.
+func (r *run) block(st *state, b *ast.BlockStmt) outcomes {
+	st.push()
+	depth := len(st.scopes)
+	var out outcomes
+	live := []*state{st}
+	notes := r.blocks[b]
+	n := 0
+	for i := 0; i <= len(b.List); i++ {
+		var next ast.Stmt
+		limit := b.Rbrace
+		if i < len(b.List) {
+			next = b.List[i]
+			limit = next.Pos()
+		}
+		var pending []*annot
+		for n < len(notes) && notes[n].pos < limit {
+			a := notes[n]
+			n++
+			if a.kind == "Invariant" || a.kind == "Variant" {
+				if isLoop(next) {
+					pending = append(pending, a)
+				}
+				continue // at the end of a loop's body it belongs to that loop
+			}
+			for _, s := range live {
+				r.note(s, a)
+			}
+		}
+		if next == nil {
+			break
+		}
+		var after []*state
+		for _, s := range live {
+			o := r.stmt(s, next, pending)
+			after = append(after, o.normal...)
+			out.brk = append(out.brk, o.brk...)
+			out.cont = append(out.cont, o.cont...)
+		}
+		live = after
+		if r.paths += len(live); r.paths > maxPaths*50 || len(live) > maxPaths {
+			r.no(next, "there are too many paths through it")
+		}
+	}
+	for _, s := range live {
+		s.popTo(depth - 1)
+	}
+	out.normal = live
+	return out
+}
+
+func isLoop(s ast.Stmt) bool {
+	switch s.(type) {
+	case *ast.ForStmt, *ast.RangeStmt:
+		return true
+	}
+	return false
+}
+```
+
+```go
+// note handles an annotation that stands where a statement could.
+func (r *run) note(st *state, a *annot) {
+	a.used = true
+	if a.e == nil {
+		return
+	}
+	switch a.kind {
+	case "Assert", "InductionHypothesis":
+		f := r.formula(st, a, false)
+		r.check(st, f, a, nil, nil, a.kind+" is not proved: "+a.text)
+		r.assume(st, f)
+	case "Axiom":
+		r.v.report(a.where, a.endCol, true, "Axiom is taken on trust, not proved: "+a.text)
+		r.assume(st, r.formula(st, a, false))
+	case "Preserves":
+		f := r.formula(st, a, false)
+		r.check(st, f, a, nil, nil, "Preserves does not hold to begin with: "+a.text)
+		r.assume(st, f)
+		st.preserved = append(st.preserved, kept{a, len(st.scopes)})
+	case "BaseCase":
+		st.base = append(st.base, r.formula(st, a, false))
+	case "Immutable":
+	default:
+		r.v.report(a.where, a.endCol, false, a.kind+" does not belong inside a function body")
+	}
+}
+```
+
+```go
+func (r *run) stmt(st *state, s ast.Stmt, pending []*annot) outcomes {
+	switch s := s.(type) {
+	case *ast.EmptyStmt:
+		return outcomes{normal: []*state{st}}
+	case *ast.BlockStmt:
+		return r.block(st, s)
+	case *ast.DeclStmt:
+		g, ok := s.Decl.(*ast.GenDecl)
+		if !ok || g.Tok != token.VAR {
+			r.no(s, "only variables can be declared inside a verified function")
+		}
+		for _, spec := range g.Specs {
+			vs := spec.(*ast.ValueSpec)
+			for i, n := range vs.Names {
+				var val *expr
+				k := kNone
+				if vs.Type != nil {
+					k, _ = r.v.kindOf(vs.Type)
+				}
+				if i < len(vs.Values) {
+					val = r.value(st, vs.Values[i])
+					if k == kNone {
+						k = kInt
+						if isBool(val) {
+							k = kBool
+						}
+					}
+				} else if k == kInt {
+					val = num(0)
+				} else if k == kBool {
+					val = eFalse
+				}
+				if val == nil || k != kInt && k != kBool {
+					r.no(s, "%s is neither an integer nor a boolean", n.Name)
+				}
+				st.declare(n.Name, &binding{kind: k, hist: []*expr{val}})
+			}
+		}
+		return outcomes{normal: []*state{st}}
+	case *ast.AssignStmt:
+		r.assign(st, s)
+		return outcomes{normal: []*state{st}}
+	case *ast.IncDecStmt:
+		one := mk(opAdd, r.value(st, s.X), num(1))
+		if s.Tok == token.DEC {
+			one.op = opSub
+		}
+		r.set(st, s.X, one, s)
+		return outcomes{normal: []*state{st}}
+	case *ast.ExprStmt:
+		r.effect(st, s)
+		return outcomes{normal: []*state{st}}
+	case *ast.ReturnStmt:
+		r.ret(st, s)
+		return outcomes{}
+	case *ast.BranchStmt:
+		if s.Label != nil {
+			r.no(s, "labels are outside what litgo prove understands")
+		}
+		switch s.Tok {
+		case token.BREAK:
+			return outcomes{brk: []*state{st}}
+		case token.CONTINUE:
+			return outcomes{cont: []*state{st}}
+		}
+	case *ast.IfStmt:
+		return r.branch(st, s)
+	case *ast.ForStmt:
+		return r.loop(st, &loop{stmt: s, init: s.Init, cond: s.Cond, post: s.Post, body: s.Body}, pending)
+	case *ast.RangeStmt:
+		return r.loop(st, &loop{stmt: s, over: s, body: s.Body}, pending)
+	}
+	r.no(s, "this statement is outside what litgo prove understands")
+	return outcomes{}
+}
+```
+
+```go
+// effect is a call made for what it does. A call of a verified function is
+// checked like any other. A call of anything else is let through if all it
+// is handed are numbers, booleans and literals, because then it cannot
+// change anything the proof is about. panic ends the path.
+func (r *run) effect(st *state, s *ast.ExprStmt) {
+	c, ok := s.X.(*ast.CallExpr)
+	if !ok {
+		r.no(s, "this statement is outside what litgo prove understands")
+	}
+	if id, ok := c.Fun.(*ast.Ident); ok && id.Name == "panic" {
+		r.assume(st, eFalse)
+		return
+	}
+	if callee, _ := r.callee(st, c); callee != nil {
+		r.eval(st, r.pure(c, func(name string) vkind {
+			if b := r.binding(st, name); b != nil {
+				return b.kind
+			}
+			return kNone
+		}), nil, c)
+		return
+	}
+	if sel, ok := c.Fun.(*ast.SelectorExpr); ok {
+		if x, ok := sel.X.(*ast.Ident); ok && st.vars[x.Name] != nil {
+			r.no(c, "%s.%s has no contract, and a method may change what it is called on", x.Name, sel.Sel.Name)
+		}
+	}
+	for _, a := range c.Args {
+		if lit, ok := a.(*ast.BasicLit); ok && lit.Kind != token.INT {
+			continue
+		}
+		if v := r.value(st, a); v.sort == sArr {
+			r.no(a, "a slice handed to a function without a contract may come back changed")
+		}
+	}
+}
+```
+
+Assignments go to variables only. `A[i] = x` and `p.f = x` are refused, and the
+reason is aliasing: another slice may share the array, another pointer may
+reach the struct, and a proof that did not see them change would be a proof of
+something false.
+
+```go
+func (r *run) assign(st *state, s *ast.AssignStmt) {
+	ops := map[token.Token]op{token.ADD_ASSIGN: opAdd, token.SUB_ASSIGN: opSub, token.MUL_ASSIGN: opMul,
+		token.QUO_ASSIGN: opDiv, token.REM_ASSIGN: opMod}
+	if o, ok := ops[s.Tok]; ok {
+		bin := &ast.BinaryExpr{X: s.Lhs[0], OpPos: s.TokPos, Y: s.Rhs[0],
+			Op: map[op]token.Token{opAdd: token.ADD, opSub: token.SUB, opMul: token.MUL, opDiv: token.QUO, opMod: token.REM}[o]}
+		r.set(st, s.Lhs[0], r.value(st, bin), s)
+		return
+	}
+	if s.Tok != token.ASSIGN && s.Tok != token.DEFINE {
+		r.no(s, "this assignment is outside what litgo prove understands")
+	}
+	var vals []*expr
+	if len(s.Rhs) == 1 && len(s.Lhs) > 1 {
+		c, ok := s.Rhs[0].(*ast.CallExpr)
+		if !ok {
+			r.no(s, "only a call can give several values at once")
+		}
+		vals = r.eval(st, r.pure(c, func(name string) vkind {
+			if b := r.binding(st, name); b != nil {
+				return b.kind
+			}
+			return kNone
+		}), nil, c)
+	} else {
+		for _, x := range s.Rhs {
+			vals = append(vals, r.value(st, x))
+		}
+	}
+	if len(vals) != len(s.Lhs) {
+		r.no(s, "the two sides of this assignment do not match")
+	}
+	for i, l := range s.Lhs {
+		id, ok := l.(*ast.Ident)
+		if s.Tok == token.DEFINE && ok && (st.vars[id.Name] == nil || !r.inScope(st, id.Name)) {
+			k := kInt
+			if isBool(vals[i]) {
+				k = kBool
+			} else if vals[i].sort == sArr {
+				r.no(s, "slices cannot be copied inside a verified function")
+			}
+			st.declare(id.Name, &binding{kind: k, hist: []*expr{vals[i]}})
+			continue
+		}
+		r.store(st, l, vals[i])
+	}
+	// A parallel assignment is one step: what is preserved is looked at
+	// once all of it has happened.
+	r.keep(st, s)
+}
+
+// inScope reports whether a name was declared in the innermost block, which
+// is what decides whether := declares it again.
+func (r *run) inScope(st *state, name string) bool {
+	_, ok := st.scopes[len(st.scopes)-1][name]
+	return ok
+}
+
+// set assigns to a variable, and then looks at what was promised to be
+// preserved.
+func (r *run) set(st *state, target ast.Expr, val *expr, at ast.Node) {
+	r.store(st, target, val)
+	r.keep(st, at)
+}
+
+func (r *run) store(st *state, target ast.Expr, val *expr) {
+	id, ok := target.(*ast.Ident)
+	if !ok {
+		r.no(target, "only variables can be assigned to: an element of a slice or a field may have other names, and the proof would not see them change")
+	}
+	if id.Name == "_" {
+		return
+	}
+	b := st.vars[id.Name]
+	if b == nil || b.kind != kInt && b.kind != kBool {
+		r.no(target, "%s is not an integer or boolean variable", id.Name)
+	}
+	b.hist = append(b.hist, val)
+}
+
+func (r *run) keep(st *state, at ast.Node) {
+	for _, k := range st.preserved {
+		f := r.formula(st, k.a, false)
+		r.check(st, f, k.a, nil, at, "Preserves is broken by the assignment at {ref}: "+k.a.text)
+		r.assume(st, f)
+	}
+}
+```
+
+A branch that cannot be taken is dropped, by asking the prover whether the
+hypotheses have become contradictory. Without that, the obligations of
+unreachable code would be "proved" from the contradiction, which is harmless,
+but paths multiply and these are the cheap ones to lose.
+
+```go
+func (r *run) branch(st *state, s *ast.IfStmt) outcomes {
+	st.push()
+	depth := len(st.scopes)
+	var out outcomes
+	starts := []*state{st}
+	if s.Init != nil {
+		starts = r.stmt(st, s.Init, nil).normal
+	}
+	for _, st := range starts {
+		cond := r.value(st, s.Cond)
+		yes, no := st, st.clone()
+		r.assume(yes, cond)
+		r.assume(no, not(cond))
+		if r.feasible(yes) {
+			out.add(r.block(yes, s.Body))
+		}
+		if r.feasible(no) {
+			switch e := s.Else.(type) {
+			case nil:
+				out.normal = append(out.normal, no)
+			case *ast.BlockStmt:
+				out.add(r.block(no, e))
+			case *ast.IfStmt:
+				out.add(r.branch(no, e))
+			}
+		}
+	}
+	for _, s := range out.normal {
+		s.popTo(depth - 1)
+	}
+	return out
+}
+```
+
+```go
+// ret settles a return: the results get their values, and every
+// postcondition is an obligation.
+func (r *run) ret(st *state, s *ast.ReturnStmt) {
+	if len(s.Results) > 0 {
+		var vals []*expr
+		if len(s.Results) == 1 && len(r.f.results) > 1 {
+			c, ok := s.Results[0].(*ast.CallExpr)
+			if !ok {
+				r.no(s, "only a call can give several values at once")
+			}
+			vals = r.eval(st, r.pure(c, func(name string) vkind {
+				if b := r.binding(st, name); b != nil {
+					return b.kind
+				}
+				return kNone
+			}), nil, c)
+		} else {
+			for _, x := range s.Results {
+				vals = append(vals, r.value(st, x))
+			}
+		}
+		if len(vals) != len(r.f.results) {
+			r.no(s, "this return does not match the results")
+		}
+		// The results may be shadowed here; a return assigns the real ones.
+		for i, p := range r.f.results {
+			st.vars[p.name] = &binding{kind: p.kind, hist: []*expr{vals[i]}}
+		}
+	}
+	r.leave(st, s.Pos())
+}
+
+func (r *run) leave(st *state, at token.Pos) {
+	for _, a := range r.f.ensures {
+		if a.e != nil {
+			r.check(st, r.formula(st, a, true), a, nil, point(at), "Ensures is not proved for the return at {ref}: "+a.text)
+		}
+	}
+	for _, a := range r.f.exsures {
+		if a.e != nil {
+			r.check(st, not(r.formula(st, a, true)), a, nil, point(at), "Exsures is not ruled out for the return at {ref}: "+a.text)
+		}
+	}
+}
+```
+
+### Loops
+
+A loop cannot be walked, because nobody knows how often it goes round. The
+invariant is what cuts it:
+
+1. The invariant is proved for the state that reaches the loop.
+2. Every variable the loop assigns to is forgotten: it gets a fresh symbol, and
+   all that is assumed about the new symbols is the invariant (and whatever the
+   enclosing blocks promised to preserve). This state stands for the start of
+   *any* iteration.
+3. From there, with the condition true, the body is walked once. At its end the
+   invariant is proved again, and the variant is proved smaller than it was and
+   to have been non-negative.
+4. From the same state, with the condition false, the walk goes on after the
+   loop.
+
+A `break` leaves with whatever is known at that point, which need not include
+the invariant. A `range` loop is a counted loop whose counter cannot be
+tampered with, so it needs no variant to be known to end.
+
+```go
+// loop is a for statement, or a range statement read as one.
+type loop struct {
+	stmt ast.Stmt
+	init ast.Stmt
+	cond ast.Expr
+	post ast.Stmt
+	body *ast.BlockStmt
+	over *ast.RangeStmt
+}
+
+// loop cuts a loop at its invariant. The invariant is proved on entry;
+// then everything the loop assigns is forgotten, the invariant is assumed,
+// and one iteration has to give it back, with a smaller variant. What
+// follows the loop knows the invariant and that the condition is false.
+func (r *run) loop(st *state, l *loop, pending []*annot) outcomes {
+	var invs, vars []*annot
+	notes := append(append([]*annot{}, pending...), r.trailing(l.body)...)
+	for _, a := range notes {
+		a.used = true
+		if a.e == nil {
+			continue
+		}
+		if a.kind == "Invariant" {
+			invs = append(invs, a)
+		} else {
+			vars = append(vars, a)
+		}
+	}
+	if len(vars) == 0 && l.over == nil {
+		r.v.report(r.v.position(l.stmt.Pos()), r.v.position(l.stmt.Pos()).Col+3, true, "this loop has no Variant, so nothing shows that it terminates")
+	}
+	st.push()
+	depth := len(st.scopes)
+	var out outcomes
+	starts := []*state{st}
+	var index string // the counter of a range loop
+	var bound *expr
+	if l.over != nil {
+		index, bound = r.rangeStart(st, l.over)
+	} else if l.init != nil {
+		starts = r.stmt(st, l.init, nil).normal
+	}
+	for _, s0 := range starts {
+		for _, a := range invs {
+			r.check(s0, r.formula(s0, a, false), a, nil, l.stmt, "Invariant does not hold when the loop at {ref} is entered: "+a.text)
+		}
+		head := s0.clone()
+		for _, name := range r.assigned(l) {
+			if b := head.vars[name]; b != nil && (b.kind == kInt || b.kind == kBool) {
+				b.hist = []*expr{r.fresh(name, b.kind)}
+			}
+		}
+		if index != "" {
+			b := head.vars[index]
+			b.hist = []*expr{r.fresh(index, kInt)}
+			r.assume(head, mk(opAnd, mk(opLe, num(0), b.hist[0]), mk(opLe, b.hist[0], bound)))
+		}
+		for _, a := range invs {
+			r.assume(head, r.formula(head, a, false))
+		}
+		for _, k := range head.preserved {
+			r.assume(head, r.formula(head, k.a, false))
+		}
+		var cond *expr
+		switch {
+		case index != "":
+			cond = mk(opLt, head.vars[index].hist[0], bound)
+		case l.cond != nil:
+			cond = r.value(head, l.cond)
+		default:
+			cond = eTrue
+		}
+		exit := head.clone()
+		r.assume(exit, not(cond))
+		if r.feasible(exit) {
+			out.normal = append(out.normal, exit)
+		}
+		body := head
+		r.assume(body, cond)
+		if !r.feasible(body) {
+			continue
+		}
+		var before []*expr
+		for _, a := range vars {
+			m := r.formula(body, a, false)
+			before = append(before, m)
+			r.check(body, mk(opLe, num(0), m), a, nil, nil, "Variant can be negative while the loop still runs: "+a.text)
+		}
+		if l.over != nil && l.over.Value != nil {
+			if id, ok := l.over.Value.(*ast.Ident); ok && id.Name != "_" {
+				body.push()
+				arr := r.value(body, l.over.X)
+				body.declare(id.Name, &binding{kind: kInt, hist: []*expr{mk(opSel, arr, body.vars[index].hist[0])}})
+			}
+		}
+		o := r.block(body, l.body)
+		out.normal = append(out.normal, o.brk...)
+		for _, s := range append(o.normal, o.cont...) {
+			s.popTo(depth)
+			ends := []*state{s}
+			if index != "" {
+				b := s.vars[index]
+				b.hist = append(b.hist, mk(opAdd, b.hist[len(b.hist)-1], num(1)))
+			} else if l.post != nil {
+				ends = r.stmt(s, l.post, nil).normal
+			}
+			for _, s := range ends {
+				for _, a := range invs {
+					r.check(s, r.formula(s, a, false), a, nil, l.stmt, "Invariant is not maintained by the body of the loop at {ref}: "+a.text)
+				}
+				for i, a := range vars {
+					r.check(s, mk(opLt, r.formula(s, a, false), before[i]), a, nil, l.stmt, "Variant is not shown to decrease in the loop at {ref}: "+a.text)
+				}
+			}
+		}
+	}
+	for _, s := range out.normal {
+		s.popTo(depth - 1)
+	}
+	return out
+}
+```
+
+```go
+// trailing finds the Invariant and Variant lines written inside a loop's
+// body rather than above the loop: the ones no inner loop follows.
+func (r *run) trailing(body *ast.BlockStmt) []*annot {
+	var out []*annot
+	for _, a := range r.blocks[body] {
+		if a.kind != "Invariant" && a.kind != "Variant" {
+			continue
+		}
+		var next ast.Stmt
+		for _, s := range body.List {
+			if s.Pos() > a.pos {
+				next = s
+				break
+			}
+		}
+		if !isLoop(next) {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// rangeStart declares the counter of a range loop, under the name the
+// program gives it if it gives it one, and finds where the counting stops.
+func (r *run) rangeStart(st *state, s *ast.RangeStmt) (string, *expr) {
+	if s.Tok == token.ASSIGN {
+		r.no(s, "a range loop has to declare its variables with :=")
+	}
+	index := "range counter"
+	if id, ok := s.Key.(*ast.Ident); ok && id.Name != "_" {
+		index = id.Name
+	}
+	for _, name := range r.assigned(&loop{body: s.Body}) {
+		if name == index {
+			r.no(s, "the body assigns to the loop's own counter")
+		}
+	}
+	var bound *expr
+	if id, ok := s.X.(*ast.Ident); ok {
+		if b := r.binding(st, id.Name); b != nil && b.kind == kSlice {
+			bound = mk(opLen, b.hist[0])
+		}
+	}
+	if sel, ok := s.X.(*ast.SelectorExpr); ok && bound == nil {
+		if x, ok := sel.X.(*ast.Ident); ok {
+			if b := r.binding(st, x.Name+"."+sel.Sel.Name); b != nil && b.kind == kSlice {
+				bound = mk(opLen, b.hist[0])
+			}
+		}
+	}
+	if bound == nil {
+		if s.Value != nil {
+			r.no(s, "only a slice of integers or an integer can be ranged over")
+		}
+		bound = r.value(st, s.X)
+		if isBool(bound) || bound.sort == sArr {
+			r.no(s, "only a slice of integers or an integer can be ranged over")
+		}
+	}
+	st.declare(index, &binding{kind: kInt, hist: []*expr{num(0)}})
+	return index, bound
+}
+
+// assigned lists the variables a loop can change.
+func (r *run) assigned(l *loop) []string {
+	seen := map[string]bool{}
+	visit := func(n ast.Node) bool {
+		switch s := n.(type) {
+		case *ast.AssignStmt:
+			for _, x := range s.Lhs {
+				if id, ok := x.(*ast.Ident); ok {
+					seen[id.Name] = true
+				}
+			}
+		case *ast.IncDecStmt:
+			if id, ok := s.X.(*ast.Ident); ok {
+				seen[id.Name] = true
+			}
+		case *ast.RangeStmt:
+			for _, x := range []ast.Expr{s.Key, s.Value} {
+				if id, ok := x.(*ast.Ident); ok {
+					seen[id.Name] = true
+				}
+			}
+		}
+		return true
+	}
+	ast.Inspect(l.body, visit)
+	if l.post != nil {
+		ast.Inspect(l.post, visit)
+	}
+	out := make([]string, 0, len(seen))
+	for n := range seen {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
+```
+
+## The prover
+
+<!-- file: internal/vego/prove.go -->
+<!-- package: vego -->
+<!-- imports: fmt, sort, strings -->
+
+An obligation is a list of hypotheses and a goal. The prover looks for a way
+the hypotheses could all be true and the goal false; if there is none, the
+goal follows. That takes four steps, each sound by itself:
+
+1. Negations are pushed inward, which turns the negated goal's `Forall` into
+   an `Exists`, and every `Exists` that is not under a `Forall` gets a fresh
+   constant as its witness.
+2. Every `Forall` is replaced by a handful of its instances: at the terms
+   that index a slice somewhere in the obligation, and at the witnesses. A
+   universal fact is only ever weakened by this. If that is not enough, it is
+   done once more, at the terms the instances brought with them, which is
+   what a proof about `A[Parent(k)]` needs and what most proofs are better
+   off without.
+3. What is left has no quantifiers. Its atoms are turned into linear
+   constraints over polynomials.
+4. A search splits on the disjunctions, and Fourier-Motzkin elimination closes
+   a branch when its constraints are contradictory.
+
+Arithmetic is normalised into polynomials. That is what makes `(q+1)*d + (r-d)`
+and `q*d + r` the same thing without any search: they are the same
+polynomial.
+
+```go
+// A poly is a sum of monomials with integer coefficients. A monomial is a
+// product of atoms, written as their names joined by sep; the constant's
+// monomial is the empty string.
+type poly map[string]int64
+
+const sep = "\x1f"
+
+func constant(v int64) poly {
+	if v == 0 {
+		return poly{}
+	}
+	return poly{"": v}
+}
+
+func (p poly) add(q poly, k int64) poly {
+	out := poly{}
+	for m, c := range p {
+		out[m] = c
+	}
+	for m, c := range q {
+		out[m] += k * c
+		if out[m] == 0 {
+			delete(out, m)
+		}
+	}
+	return out
+}
+
+func (p poly) mul(q poly) poly {
+	out := poly{}
+	for m1, c1 := range p {
+		for m2, c2 := range q {
+			var atoms []string
+			if m1 != "" {
+				atoms = append(atoms, strings.Split(m1, sep)...)
+			}
+			if m2 != "" {
+				atoms = append(atoms, strings.Split(m2, sep)...)
+			}
+			sort.Strings(atoms)
+			m := strings.Join(atoms, sep)
+			out[m] += c1 * c2
+			if out[m] == 0 {
+				delete(out, m)
+			}
+		}
+	}
+	return out
+}
+
+func (p poly) isConst() (int64, bool) {
+	if len(p) == 0 {
+		return 0, true
+	}
+	if c, ok := p[""]; ok && len(p) == 1 {
+		return c, true
+	}
+	return 0, false
+}
+
+func (p poly) String() string {
+	keys := make([]string, 0, len(p))
+	for m := range p {
+		keys = append(keys, m)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	for _, m := range keys {
+		fmt.Fprintf(&b, "%+d", p[m])
+		if m != "" {
+			b.WriteString("*" + strings.ReplaceAll(m, sep, "*"))
+		}
+	}
+	if b.Len() == 0 {
+		return "0"
+	}
+	return b.String()
+}
+```
+
+Over the integers `p < 0` is `p + 1 <= 0`, so there are no strict
+inequalities, and `p <> 0` is a choice between `p < 0` and `p > 0`.
+
+```go
+// A node is a formula whose leaves are constraints: p <= 0, p = 0, or a
+// boolean atom with a sign.
+type node struct {
+	kind  byte // 'a' and, 'o' or, 'l' p <= 0, 'e' p = 0, 'b' boolean atom, 't' true, 'f' false
+	kids  []*node
+	p     poly
+	atom  string
+	truth bool
+}
+
+var (
+	nTrue  = &node{kind: 't'}
+	nFalse = &node{kind: 'f'}
+)
+
+func le0(p poly) *node {
+	if c, ok := p.isConst(); ok {
+		if c <= 0 {
+			return nTrue
+		}
+		return nFalse
+	}
+	return &node{kind: 'l', p: p}
+}
+
+func eq0(p poly) *node {
+	if c, ok := p.isConst(); ok {
+		if c == 0 {
+			return nTrue
+		}
+		return nFalse
+	}
+	return &node{kind: 'e', p: p}
+}
+
+// lt0 is p < 0, which over the integers is p + 1 <= 0.
+func lt0(p poly) *node { return le0(p.add(constant(1), 1)) }
+
+func ne0(p poly) *node { return nOr(lt0(p), lt0(poly{}.add(p, -1))) }
+
+func nAnd(kids ...*node) *node {
+	var out []*node
+	for _, k := range kids {
+		switch k.kind {
+		case 't':
+		case 'f':
+			return nFalse
+		case 'a':
+			out = append(out, k.kids...)
+		default:
+			out = append(out, k)
+		}
+	}
+	if len(out) == 0 {
+		return nTrue
+	}
+	if len(out) == 1 {
+		return out[0]
+	}
+	return &node{kind: 'a', kids: out}
+}
+
+func nOr(kids ...*node) *node {
+	var out []*node
+	for _, k := range kids {
+		switch k.kind {
+		case 'f':
+		case 't':
+			return nTrue
+		case 'o':
+			out = append(out, k.kids...)
+		default:
+			out = append(out, k)
+		}
+	}
+	if len(out) == 0 {
+		return nFalse
+	}
+	if len(out) == 1 {
+		return out[0]
+	}
+	return &node{kind: 'o', kids: out}
+}
+```
+
+```go
+// The budgets keep a hopeless proof from holding up the editor. Running out
+// of budget means "not proved", never "proved".
+const (
+	maxSteps       = 2000
+	maxConstraints = 1500
+	maxInstances   = 4000
+	maxTerms       = 14
+)
+
+type prover struct {
+	fresh     int
+	steps     int
+	instances int
+	gaveUp    bool
+	atoms     map[string]bool // atoms whose axioms have been stated
+	axioms    []*node
+	sels      map[string][]selAtom // by array
+}
+
+type selAtom struct {
+	name string
+	idx  poly
+}
+
+// proves reports whether the hypotheses entail the goal. It answers by
+// refutation: the hypotheses and the goal's negation must have no model.
+func proves(hyps []*expr, goal *expr) bool {
+	// Most proofs need every Forall only at the terms that are already there.
+	// Some need it again at the terms those instances mention, and that costs
+	// much more, so it is the second thing to try and not the first.
+	return attempt(hyps, goal, 1) || attempt(hyps, goal, 2)
+}
+
+func attempt(hyps []*expr, goal *expr, rounds int) bool {
+	pr := &prover{atoms: map[string]bool{}, sels: map[string][]selAtom{}}
+	f := nnf(and(conj(hyps), not(goal)), true)
+	f = pr.skolem(f)
+	for round := 0; round < rounds; round++ {
+		f = pr.instantiate(f, pr.terms(f), round < rounds-1)
+	}
+	f = pr.instantiate(f, nil, false)
+	g := pr.ground(f)
+	pr.congruence()
+	all := nAnd(append([]*node{g}, pr.axioms...)...)
+	return pr.refute(nil, map[string]bool{}, []*node{all}) && !pr.gaveUp
+}
+```
+
+```go
+// nnf pushes negations down to the atoms. pos is false under a negation.
+func nnf(e *expr, pos bool) *expr {
+	switch e.op {
+	case opTrue, opFalse:
+		if pos == (e.op == opTrue) {
+			return eTrue
+		}
+		return eFalse
+	case opNot:
+		return nnf(e.args[0], !pos)
+	case opAnd, opOr:
+		o := e.op
+		if !pos {
+			o = opAnd + opOr - o
+		}
+		return mk(o, nnf(e.args[0], pos), nnf(e.args[1], pos))
+	case opImp:
+		if pos {
+			return mk(opOr, nnf(e.args[0], false), nnf(e.args[1], true))
+		}
+		return mk(opAnd, nnf(e.args[0], true), nnf(e.args[1], false))
+	case opIff:
+		a, b := e.args[0], e.args[1]
+		if pos {
+			return mk(opAnd, mk(opOr, nnf(a, false), nnf(b, true)), mk(opOr, nnf(b, false), nnf(a, true)))
+		}
+		return mk(opOr, mk(opAnd, nnf(a, true), nnf(b, false)), mk(opAnd, nnf(b, true), nnf(a, false)))
+	case opForall, opExists:
+		o := e.op
+		if !pos {
+			o = opForall + opExists - o
+		}
+		return &expr{op: o, name: e.name, args: []*expr{nnf(e.args[0], pos)}}
+	}
+	if pos {
+		return e
+	}
+	switch e.op {
+	case opLt:
+		return mk(opLe, e.args[1], e.args[0])
+	case opLe:
+		return mk(opLt, e.args[1], e.args[0])
+	case opEq:
+		return mk(opNe, e.args[0], e.args[1])
+	case opNe:
+		return mk(opEq, e.args[0], e.args[1])
+	}
+	return not(e) // a boolean atom
+}
+```
+
+A witness may only be named once nothing universal is above it. For
+`Forall i : Exists j : P(i, j)` the `j` depends on the `i`, so the `Exists`
+waits until the `Forall` has been instantiated and gets a new witness per
+instance.
+
+```go
+// skolem names a witness for every Exists that is not under a Forall. One
+// under a Forall waits until the Forall has been instantiated.
+func (pr *prover) skolem(e *expr) *expr {
+	switch e.op {
+	case opAnd, opOr:
+		return mk(e.op, pr.skolem(e.args[0]), pr.skolem(e.args[1]))
+	case opExists:
+		pr.fresh++
+		w := sym(fmt.Sprintf("%s?%d", e.name, pr.fresh), sInt)
+		return pr.skolem(subst(e.args[0], e.name, w))
+	}
+	return e
+}
+
+// terms collects what a Forall might be worth instantiating with: the ground
+// terms that index a slice, and the witnesses.
+func (pr *prover) terms(e *expr) []*expr {
+	seen := map[string]bool{}
+	var out []*expr
+	var walk func(e *expr, bound []string)
+	walk = func(e *expr, bound []string) {
+		if e == nil {
+			return
+		}
+		if e.op == opForall || e.op == opExists {
+			bound = append(bound[:len(bound):len(bound)], e.name)
+		}
+		candidate := e.op == opSel && len(e.args) == 2
+		var t *expr
+		if candidate {
+			t = e.args[1]
+		} else if e.op == opVar && strings.Contains(e.name, "?") {
+			t, candidate = e, true
+		}
+		if candidate {
+			free := true
+			for _, n := range names(t) {
+				for _, b := range bound {
+					free = free && n != b
+				}
+			}
+			if key := t.String(); free && !seen[key] && len(out) < maxTerms {
+				seen[key] = true
+				out = append(out, t)
+			}
+		}
+		for _, a := range e.args {
+			walk(a, bound)
+		}
+	}
+	walk(e, nil)
+	return out
+}
+
+// instantiate replaces every outermost Forall by its instances at the terms,
+// and keeps the Forall itself for a later round if asked to.
+func (pr *prover) instantiate(e *expr, terms []*expr, keep bool) *expr {
+	switch e.op {
+	case opAnd, opOr:
+		return mk(e.op, pr.instantiate(e.args[0], terms, keep), pr.instantiate(e.args[1], terms, keep))
+	case opForall:
+		out := eTrue
+		if keep {
+			out = e
+		}
+		for _, t := range terms {
+			if pr.instances++; pr.instances > maxInstances {
+				pr.gaveUp = true
+				break
+			}
+			inst := pr.skolem(subst(e.args[0], e.name, t))
+			out = and(out, pr.instantiate(inst, terms, keep))
+		}
+		return out
+	}
+	return e
+}
+```
+
+```go
+// ground turns a quantifier-free formula into constraints.
+func (pr *prover) ground(e *expr) *node {
+	switch e.op {
+	case opTrue:
+		return nTrue
+	case opFalse:
+		return nFalse
+	case opAnd:
+		return nAnd(pr.ground(e.args[0]), pr.ground(e.args[1]))
+	case opOr:
+		return nOr(pr.ground(e.args[0]), pr.ground(e.args[1]))
+	case opForall:
+		return nTrue // a fact we could not use
+	case opExists:
+		pr.gaveUp = true
+		return nTrue
+	case opNot:
+		return &node{kind: 'b', atom: e.args[0].String(), truth: false}
+	case opVar, opCall:
+		return &node{kind: 'b', atom: e.String(), truth: true}
+	}
+	if len(e.args) != 2 || isBool(e.args[0]) || isBool(e.args[1]) {
+		pr.gaveUp = true // a number where a formula belongs, or the other way round
+		return nTrue
+	}
+	d := pr.poly(e.args[0]).add(pr.poly(e.args[1]), -1)
+	switch e.op {
+	case opLe:
+		return le0(d)
+	case opLt:
+		return lt0(d)
+	case opEq:
+		return eq0(d)
+	case opNe:
+		return ne0(d)
+	}
+	pr.gaveUp = true
+	return nTrue
+}
+```
+
+Whatever is not addition or multiplication by a constant becomes an atom, an
+unknown of its own, and the facts that make it more than an unknown are added
+as axioms the first time it appears: a length is not negative, a quotient and
+its remainder add up, equal indices select equal elements, and a product of
+non-negative numbers is not negative.
+
+```go
+// poly normalises an integer term. Whatever is not arithmetic becomes an
+// atom: a variable, an element of a slice, a length, a quotient.
+func (pr *prover) poly(e *expr) poly {
+	switch e.op {
+	case opNum:
+		return constant(e.val)
+	case opVar:
+		return poly{e.name: 1}
+	case opAdd:
+		return pr.poly(e.args[0]).add(pr.poly(e.args[1]), 1)
+	case opSub:
+		return pr.poly(e.args[0]).add(pr.poly(e.args[1]), -1)
+	case opNeg:
+		return poly{}.add(pr.poly(e.args[0]), -1)
+	case opMul:
+		p := pr.poly(e.args[0]).mul(pr.poly(e.args[1]))
+		pr.products(p)
+		return p
+	case opLen:
+		name := "len(" + e.args[0].name + ")"
+		if !pr.atoms[name] {
+			pr.atoms[name] = true
+			pr.axioms = append(pr.axioms, le0(poly{name: -1}))
+		}
+		return poly{name: 1}
+	case opSel:
+		idx := pr.poly(e.args[1])
+		arr := e.args[0].name
+		name := arr + "[" + idx.String() + "]"
+		if !pr.atoms[name] {
+			pr.atoms[name] = true
+			pr.sels[arr] = append(pr.sels[arr], selAtom{name, idx})
+		}
+		return poly{name: 1}
+	case opDiv, opMod:
+		return pr.divide(e)
+	}
+	pr.gaveUp = true
+	return poly{e.String(): 1}
+}
+
+// divide states what Go's division means. For a = q*b + r with b > 0, the
+// remainder has the sign of a and is smaller than b.
+func (pr *prover) divide(e *expr) poly {
+	a, b := pr.poly(e.args[0]), pr.poly(e.args[1])
+	key := "(" + a.String() + ")/(" + b.String() + ")"
+	q, r := "quo"+key, "rem"+key
+	if !pr.atoms[q] {
+		pr.atoms[q] = true
+		qb := poly{q: 1}.mul(b)
+		pr.products(qb)
+		// a = q*b + r
+		pr.axioms = append(pr.axioms, eq0(a.add(qb, -1).add(poly{r: 1}, -1)))
+		pos := lt0(poly{}.add(b, -1))                    // 0 < b
+		nonneg, nonpos := le0(poly{}.add(a, -1)), le0(a) // 0 <= a, a <= 0
+		small := lt0(poly{r: 1}.add(b, -1))              // r < b
+		smallNeg := lt0(poly{r: -1}.add(b, -1))          // -r < b
+		pr.axioms = append(pr.axioms,
+			nOr(negate(pos), negate(nonneg), nAnd(le0(poly{r: -1}), small, le0(poly{q: -1}))),
+			nOr(negate(pos), negate(nonpos), nAnd(le0(poly{r: 1}), smallNeg, le0(poly{q: 1}))))
+	}
+	if e.op == opDiv {
+		return poly{q: 1}
+	}
+	return poly{r: 1}
+}
+
+// negate works on the constraints divide builds: p <= 0 becomes -p + 1 <= 0.
+func negate(n *node) *node {
+	switch n.kind {
+	case 't':
+		return nFalse
+	case 'f':
+		return nTrue
+	case 'l':
+		return lt0(poly{}.add(n.p, -1))
+	}
+	panic("negate: not an inequality")
+}
+
+// products says the little that is known about x*y: it is not negative when
+// neither factor is, and a square never is.
+func (pr *prover) products(p poly) {
+	for m := range p {
+		atoms := strings.Split(m, sep)
+		if len(atoms) != 2 || pr.atoms[m] {
+			continue
+		}
+		pr.atoms[m] = true
+		x, y := atoms[0], atoms[1]
+		if x == y {
+			pr.axioms = append(pr.axioms, le0(poly{m: -1}))
+			continue
+		}
+		pr.axioms = append(pr.axioms, nOr(lt0(poly{x: 1}), lt0(poly{y: 1}), le0(poly{m: -1})),
+			nOr(lt0(poly{x: 1}), le0(poly{y: 1}), le0(poly{x: 1, m: -1})), // 0 <= x and 1 <= y: x <= xy
+			nOr(lt0(poly{y: 1}), le0(poly{x: 1}), le0(poly{y: 1, m: -1})))
+	}
+}
+
+// congruence says that equal indices select equal elements.
+func (pr *prover) congruence() {
+	pairs := 0
+	for _, list := range pr.sels {
+		for i := range list {
+			for j := i + 1; j < len(list); j++ {
+				d := list[i].idx.add(list[j].idx, -1)
+				if c, ok := d.isConst(); ok && c != 0 {
+					continue
+				}
+				if pairs++; pairs > 80 {
+					return
+				}
+				pr.axioms = append(pr.axioms, nOr(ne0(d), eq0(poly{list[i].name: 1, list[j].name: -1})))
+			}
+		}
+	}
+}
+```
+
+The search keeps the constraints of the branch it is in and the disjunctions
+it has not decided. Before it splits, it drops every disjunct that already
+contradicts the branch; a disjunction with one disjunct left is a fact and one
+with none closes the branch, which is unit propagation, and it is what keeps
+the instances of a quantifier from multiplying the work.
+
+```go
+// refute reports whether the constraints, the boolean assignment and the
+// formulas still to do are unsatisfiable together.
+func (pr *prover) refute(cons []poly2, bools map[string]bool, todo []*node) bool {
+	if pr.steps++; pr.steps > maxSteps {
+		pr.gaveUp = true
+		return false
+	}
+	cons = cons[:len(cons):len(cons)]
+	var ors []*node
+	copied := false
+	for len(todo) > 0 {
+		n := todo[len(todo)-1]
+		todo = todo[: len(todo)-1 : len(todo)-1]
+		switch n.kind {
+		case 'f':
+			return true
+		case 'a':
+			todo = append(todo, n.kids...)
+		case 'o':
+			ors = append(ors, n)
+		case 'l', 'e':
+			cons = append(cons, poly2{n.p, n.kind == 'e'})
+		case 'b':
+			if v, ok := bools[n.atom]; ok && v != n.truth {
+				return true
+			}
+			if !copied {
+				c := make(map[string]bool, len(bools)+1)
+				for k, v := range bools {
+					c[k] = v
+				}
+				bools, copied = c, true
+			}
+			bools[n.atom] = n.truth
+		}
+	}
+	if pr.unsat(cons) {
+		return true
+	}
+	if len(ors) == 0 {
+		return false
+	}
+	// Drop the disjuncts that are already impossible; a disjunction with one
+	// disjunct left is a fact, and one with none closes the branch.
+	var rest []*node
+	var units []*node
+	for _, o := range ors {
+		var live []*node
+		for _, k := range o.kids {
+			if !pr.dead(cons, bools, k) {
+				live = append(live, k)
+			}
+		}
+		switch len(live) {
+		case 0:
+			return true
+		case 1:
+			units = append(units, live[0])
+		default:
+			rest = append(rest, &node{kind: 'o', kids: live})
+		}
+	}
+	if len(units) > 0 {
+		return pr.refute(cons, bools, append(rest, units...))
+	}
+	sort.SliceStable(rest, func(i, j int) bool { return len(rest[i].kids) < len(rest[j].kids) })
+	for _, k := range rest[0].kids {
+		if !pr.refute(cons, bools, append(rest[1:len(rest):len(rest)], k)) {
+			return false
+		}
+	}
+	return true
+}
+
+// dead reports whether a disjunct is a constraint that contradicts what is
+// already known. Anything more complicated is left for the branch to find.
+func (pr *prover) dead(cons []poly2, bools map[string]bool, n *node) bool {
+	switch n.kind {
+	case 'f':
+		return true
+	case 'b':
+		v, ok := bools[n.atom]
+		return ok && v != n.truth
+	case 'l', 'e':
+		return pr.unsat(append(cons[:len(cons):len(cons)], poly2{n.p, n.kind == 'e'}))
+	}
+	return false
+}
+
+// poly2 is one constraint: p <= 0, or p = 0.
+type poly2 struct {
+	p  poly
+	eq bool
+}
+```
+
+### Fourier-Motzkin elimination
+
+To decide whether linear inequalities can hold together, pick a variable,
+pair every constraint that bounds it from above with every one that bounds it
+from below, and keep the sums, in which the variable cancels. Repeat until no
+variables are left; the constraints are contradictory exactly when some
+$c \le 0$ with a positive $c$ remains. That is complete over the rationals.
+Over the integers it is only sound, and two small things make it sharper:
+equalities are solved and substituted first, and every constraint is divided
+by the gcd of its coefficients with the constant rounded, so that
+$2x \le 1$ becomes $x \le 0$.
+
+```go
+// unsat decides whether linear constraints have no rational solution, with
+// the rounding that makes it sharper over the integers. Every monomial is a
+// variable here, so a product is just another unknown.
+func (pr *prover) unsat(cons []poly2) bool {
+	var eqs, les []poly
+	for _, c := range cons {
+		if c.eq {
+			eqs = append(eqs, c.p)
+		} else {
+			les = append(les, c.p)
+		}
+	}
+	eqs, les = squeeze(eqs, les)
+	eqs, les = unfoldProducts(eqs, les)
+	// Equalities first: solve each for one variable and substitute.
+	for len(eqs) > 0 {
+		e := eqs[0]
+		eqs = eqs[1:]
+		e, ok := tighten(e, true)
+		if !ok {
+			return true
+		}
+		if len(e) == 0 {
+			continue
+		}
+		v := pivot(e)
+		for i := range eqs {
+			eqs[i] = eliminate(eqs[i], e, v)
+		}
+		for i := range les {
+			les[i] = eliminate(les[i], e, v)
+		}
+	}
+	for {
+		// Normalise, drop what is trivially true, and keep the tightest of the
+		// constraints that differ only in their constant.
+		best := map[string]poly{}
+		for _, p := range les {
+			p, _ := tighten(p, false)
+			if c, ok := p.isConst(); ok {
+				if c > 0 {
+					return true
+				}
+				continue
+			}
+			k := key(p)
+			if old, ok := best[k]; !ok || p[""] > old[""] {
+				best[k] = p
+			}
+		}
+		if len(best) == 0 {
+			return false
+		}
+		if len(best) > maxConstraints {
+			pr.gaveUp = true
+			return false
+		}
+		les = les[:0]
+		keys := make([]string, 0, len(best))
+		for k := range best {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			les = append(les, best[k])
+		}
+		// Eliminate the variable that multiplies the fewest pairs.
+		up, down := map[string]int{}, map[string]int{}
+		for _, p := range les {
+			for m, c := range p {
+				if m == "" {
+					continue
+				}
+				if c > 0 {
+					up[m]++
+				} else {
+					down[m]++
+				}
+			}
+		}
+		v, cost := "", -1
+		for _, p := range les {
+			for m := range p {
+				if m == "" {
+					continue
+				}
+				if c := up[m] * down[m]; cost < 0 || c < cost || c == cost && m < v {
+					v, cost = m, c
+				}
+			}
+		}
+		var next, pos, neg []poly
+		for _, p := range les {
+			switch c := p[v]; {
+			case c > 0:
+				pos = append(pos, p)
+			case c < 0:
+				neg = append(neg, p)
+			default:
+				next = append(next, p)
+			}
+		}
+		for _, p := range pos {
+			for _, n := range neg {
+				a, b := p[v], -n[v]
+				if big(a) || big(b) {
+					pr.gaveUp = true
+					return false
+				}
+				c := poly{}.add(p, b).add(n, a)
+				for _, k := range c {
+					if big(k) {
+						pr.gaveUp = true
+						return false
+					}
+				}
+				next = append(next, c)
+			}
+		}
+		les = next
+	}
+}
+```
+
+```go
+// squeeze finds the equalities hidden in pairs of inequalities: p <= 0 and
+// -p <= 0.
+func squeeze(eqs, les []poly) ([]poly, []poly) {
+	byKey := map[string]bool{}
+	for _, p := range les {
+		byKey[p.String()] = true
+	}
+	for _, p := range les {
+		if len(p) > 0 && byKey[poly{}.add(p, -1).String()] {
+			eqs = append(eqs, p)
+		}
+	}
+	return eqs, les
+}
+
+// unfoldProducts uses an equality x = e inside the products x occurs in.
+// Elimination cannot do that, because to it x*y is one unknown and x another;
+// but i = n + 1 is exactly what turns i*i into something about n.
+func unfoldProducts(eqs, les []poly) ([]poly, []poly) {
+	for round := 0; round < 8; round++ {
+		x, by := "", poly(nil)
+		for _, e := range eqs {
+			for m, c := range e {
+				if m == "" || strings.Contains(m, sep) || c != 1 && c != -1 || !inProduct(m, eqs, les) {
+					continue
+				}
+				rest := poly{}.add(e, -c) // x = rest, once x's own term is taken out
+				delete(rest, m)
+				if mentions(rest, m) {
+					continue
+				}
+				if x == "" || m < x {
+					x, by = m, rest
+				}
+			}
+		}
+		if x == "" {
+			break
+		}
+		for i := range eqs {
+			eqs[i] = substitute(eqs[i], x, by)
+		}
+		for i := range les {
+			les[i] = substitute(les[i], x, by)
+		}
+		eqs = append(eqs, poly{x: 1}.add(by, -1)) // what substituting made trivial
+	}
+	return eqs, les
+}
+
+func mentions(p poly, x string) bool {
+	for m := range p {
+		for _, a := range strings.Split(m, sep) {
+			if a == x {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func inProduct(x string, lists ...[]poly) bool {
+	for _, list := range lists {
+		for _, p := range list {
+			for m := range p {
+				if strings.Contains(m, sep) && mentions(poly{m: 1}, x) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func substitute(p poly, x string, by poly) poly {
+	if !mentions(p, x) {
+		return p
+	}
+	out := poly{}
+	for m, c := range p {
+		term := poly{"": c}
+		for _, a := range strings.Split(m, sep) {
+			switch {
+			case a == x:
+				term = term.mul(by)
+			case a != "":
+				term = term.mul(poly{a: 1})
+			}
+		}
+		out = out.add(term, 1)
+	}
+	return out
+}
+```
+
+```go
+func big(v int64) bool { return v > 1<<30 || v < -(1<<30) }
+
+func key(p poly) string {
+	ms := make([]string, 0, len(p))
+	for m := range p {
+		if m != "" {
+			ms = append(ms, m)
+		}
+	}
+	sort.Strings(ms)
+	var b strings.Builder
+	for _, m := range ms {
+		fmt.Fprintf(&b, "%d*%s;", p[m], m)
+	}
+	return b.String()
+}
+
+// tighten divides a constraint by the gcd of its coefficients. Over the
+// integers the constant of an inequality rounds up, and an equality whose
+// constant does not divide has no solution.
+func tighten(p poly, eq bool) (poly, bool) {
+	var g int64
+	for m, c := range p {
+		if m != "" {
+			g = gcd(g, c)
+		}
+	}
+	if g == 0 {
+		c := p[""]
+		return p, !eq || c == 0
+	}
+	if g == 1 {
+		return p, true
+	}
+	out := poly{}
+	for m, c := range p {
+		if m != "" {
+			out[m] = c / g
+		}
+	}
+	c := p[""]
+	if eq {
+		if c%g != 0 {
+			return p, false
+		}
+		c /= g
+	} else {
+		c = ceilDiv(c, g)
+	}
+	if c != 0 {
+		out[""] = c
+	}
+	return out, true
+}
+
+func gcd(a, b int64) int64 {
+	if a < 0 {
+		a = -a
+	}
+	if b < 0 {
+		b = -b
+	}
+	for b != 0 {
+		a, b = b, a%b
+	}
+	return a
+}
+
+func ceilDiv(a, b int64) int64 {
+	q := a / b
+	if a%b != 0 && (a < 0) == (b < 0) {
+		q++
+	}
+	return q
+}
+
+// pivot picks the variable of an equality to solve for: one with coefficient
+// ±1 if there is one, so that substituting it loses nothing over the integers.
+func pivot(e poly) string {
+	v := ""
+	for m, c := range e {
+		if m == "" {
+			continue
+		}
+		unit := c == 1 || c == -1
+		bestUnit := v != "" && (e[v] == 1 || e[v] == -1)
+		if v == "" || unit && !bestUnit || unit == bestUnit && m < v {
+			v = m
+		}
+	}
+	return v
+}
+
+// eliminate removes v from p using the equality e = 0.
+func eliminate(p, e poly, v string) poly {
+	c := p[v]
+	if c == 0 {
+		return p
+	}
+	a := e[v]
+	// |a|*p - sign(a)*c*e has no v, and scaling an inequality by |a| > 0 is fine.
+	if a < 0 {
+		return poly{}.add(p, -a).add(e, c)
+	}
+	return poly{}.add(p, a).add(e, -c)
+}
+```
+
+## Tests
+
+<!-- file: internal/vego/vego_test.go -->
+<!-- package: vego -->
+<!-- imports: go/format, os, strings, testing, github.com/tlehman/litgo/internal/lit -->
+
+A verifier has two ways to be wrong, and they are not equally bad. If it fails
+to prove something true, somebody strengthens an invariant. If it proves
+something false, it is worse than useless. So every program here that is
+proved is also broken, one small change at a time, and each broken version
+has to be rejected for the right reason.
+
+```go
+func verifySrc(t *testing.T, src string) ([]Finding, Summary) {
+	t.Helper()
+	return Verify([]Source{{"t.go", []byte("package p\n" + src)}})
+}
+
+func expectProved(t *testing.T, src string, n int) {
+	t.Helper()
+	fs, sum := verifySrc(t, src)
+	for _, f := range fs {
+		if !f.Warning {
+			t.Errorf("unexpected: %d:%d %s", f.Line+1, f.Col+1, f.Message)
+		}
+	}
+	if sum.Proved != n {
+		t.Errorf("proved %d of %d, want %d", sum.Proved, sum.Functions, n)
+	}
+}
+
+func expectFail(t *testing.T, src, want string) {
+	t.Helper()
+	fs, _ := verifySrc(t, src)
+	for _, f := range fs {
+		if !f.Warning && strings.Contains(f.Message, want) {
+			return
+		}
+	}
+	t.Errorf("no error containing %q in %v", want, fs)
+}
+
+const divide = `
+//@ Requires n >= 0 ^ d > 0
+func Divide(n, d int) (q, r int) {
+	r = n
+	//@ Invariant n = q*d + r ^ r >= 0
+	//@ Variant r
+	for r >= d {
+		q++
+		r -= d
+	}
+	return q, r
+}
+//@ Ensures n = q*d + r
+//@ Ensures 0 <= r < d
+`
+
+func TestDivide(t *testing.T) { expectProved(t, divide, 1) }
+
+// gofmt moves annotations around: //@ becomes // @ in a doc comment, and an
+// Ensures gets a blank line above it. The proof has to come out the same, and
+// so does the refusal.
+func TestSurvivesGofmt(t *testing.T) {
+	for _, src := range []string{divide, search} {
+		formatted, err := format.Source([]byte("package p\n" + src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := strings.TrimPrefix(string(formatted), "package p\n")
+		if !strings.Contains(text, "// @ Requires") || !strings.Contains(text, "}\n\n//@ Ensures") {
+			t.Fatalf("gofmt no longer does what this test is about:\n%s", text)
+		}
+		expectProved(t, text, 1)
+	}
+	formatted, _ := format.Source([]byte("package p\n" + strings.Replace(divide, "r -= d", "r -= 1", 1)))
+	expectFail(t, strings.TrimPrefix(string(formatted), "package p\n"), "Invariant is not maintained")
+}
+
+// A contract may also be written whole above its function.
+func TestContractAbove(t *testing.T) {
+	const above = `
+func First() (x int) { return 1 }
+
+//@ Requires n >= 0
+//@ Ensures r = n + 1
+func Next(n int) (r int) { return n + 1 }
+`
+	expectProved(t, above, 1)
+	expectFail(t, strings.Replace(above, "return n + 1", "return n", 1), "Ensures is not proved")
+}
+
+// What the verifier cannot follow, it refuses.
+func TestRefusals(t *testing.T) {
+	expectFail(t, `
+//@ Requires 0 <= i ^ i < |A|
+func Set(A []int, i int) (x int) {
+	A[i] = 0
+	return A[i]
+}
+//@ Ensures x = 0
+`, "only variables can be assigned to")
+	expectFail(t, `
+func scramble(A []int) {
+	for i := range A {
+		A[i] = 0
+	}
+}
+
+//@ Requires |A| > 0 ^ A[0] = 1
+func Keeps(A []int) (x int) {
+	scramble(A)
+	return A[0]
+}
+//@ Ensures x = 1
+`, "scramble has no annotations")
+	expectFail(t, `
+//@ Requires n >= 0
+func Bad(n int) (x int) {
+	//@ Assert n + 1
+	return n
+}
+`, "this has to be a formula")
+	expectFail(t, `
+//@ Requires n >= 0
+func Bad(n int) (x int) {
+	//@ Variant n > 0
+	for n > 0 {
+		n--
+	}
+	return n
+}
+`, "this has to be an integer expression")
+	fs, sum := verifySrc(t, `
+type Counter interface {
+	//@ Requires self.Value >= 0
+	Increment()
+}
+
+//@ Requires n >= 0
+func Id(n int) (x int) { return n }
+//@ Ensures x = n
+`)
+	if sum.Proved != 1 || len(fs) != 1 || !fs[0].Warning {
+		t.Errorf("findings = %+v, sum = %+v", fs, sum)
+	}
+}
+
+func TestDivideWrong(t *testing.T) {
+	expectFail(t, strings.Replace(divide, "r -= d", "r -= 1", 1), "Invariant is not maintained")
+	expectFail(t, strings.Replace(divide, "d > 0", "d >= 0", 1), "Variant is not shown to decrease")
+	expectFail(t, strings.Replace(divide, "0 <= r < d", "0 <= r <= d - 2", 1), "Ensures is not proved")
+}
+
+func TestGauss(t *testing.T) {
+	expectProved(t, `
+//@ Requires n >= 0
+func Sum(n int) (s int) {
+	//@ Invariant 0 <= i <= n + 1 ^ 2*s = i*(i-1)
+	//@ Variant n + 1 - i
+	for i := 0; i <= n; i++ {
+		s += i
+	}
+	return s
+}
+//@ Ensures 2*s = n*(n+1)
+`, 1)
+}
+
+func TestSqrt(t *testing.T) {
+	expectProved(t, `
+//@ Requires n >= 0
+func Isqrt(n int) (r int) {
+	//@ Invariant r >= 0 ^ r*r <= n
+	//@ Variant n - r*r
+	for (r+1)*(r+1) <= n {
+		r++
+	}
+	return r
+}
+//@ Ensures r*r <= n ^ n < (r+1)*(r+1)
+`, 1)
+}
+
+const search = `
+//@ Predicate Sorted(A) ::= Forall i in [0, |A|) : Forall j in [i, |A|) : A[i] <= A[j]
+
+//@ Requires Sorted(A)
+func Search(A []int, x int) (at int, found bool) {
+	lo, hi := 0, len(A)
+	//@ Invariant 0 <= lo <= hi <= |A|
+	//@ Invariant A[0:lo) < x ^ x < A[hi:|A|)
+	//@ Variant hi - lo
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		if A[mid] == x {
+			return mid, true
+		} else if A[mid] < x {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	return 0, false
+}
+//@ Ensures found -> 0 <= at < |A| ^ A[at] = x
+//@ Ensures ~found -> x <> A[:]
+`
+
+func TestSearch(t *testing.T) { expectProved(t, search, 1) }
+
+func TestSearchWrong(t *testing.T) {
+	expectFail(t, strings.Replace(search, "lo = mid + 1", "lo = mid", 1), "Variant is not shown to decrease")
+	expectFail(t, strings.Replace(search, "hi = mid\n", "hi = mid - 1\n", 1), "Invariant is not maintained")
+	expectFail(t, strings.Replace(search, "//@ Requires Sorted(A)\n", "", 1), "Invariant is not maintained")
+}
+
+func TestSafety(t *testing.T) {
+	expectFail(t, `
+//@ Requires i >= 0
+func At(A []int, i int) (x int) { return A[i] }
+`, "index may be out of range")
+	expectFail(t, `
+//@ Requires a >= 0
+func Div(a, b int) (x int) { return a / b }
+`, "divisor may be zero")
+}
+
+func TestCallsAndRecursion(t *testing.T) {
+	expectProved(t, `
+//@ Requires n >= 0
+//@ Measure n
+func Fact(n int) (f int) {
+	//@ BaseCase n = 0
+	if n == 0 {
+		return 1
+	}
+	return n * Fact(n-1)
+}
+//@ Ensures f >= 1
+
+//@ Requires a >= 0 ^ b >= 0
+func Use(a, b int) (x int) {
+	return Fact(a) + Fact(b)
+}
+//@ Ensures x >= 2
+`, 2)
+	expectFail(t, `
+//@ Requires n >= 0
+//@ Measure n
+func F(n int) (f int) {
+	if n == 0 {
+		return 1
+	}
+	return F(n)
+}
+`, "Measure is not shown to get smaller")
+}
+
+func TestPrimesAndPreserves(t *testing.T) {
+	expectProved(t, `
+//@ Requires a = a
+func P(a int) (x int) {
+	x = 0
+	x = x + 1
+	x = x + 2
+	//@ Assert x = 0 ^ x' = 1 ^ x'' = 3
+	y := a
+	//@ Preserves x + y >= a
+	x++
+	y--
+	x++
+	return x + y
+}
+//@ Ensures x >= a
+`, 1)
+}
+
+// The examples are documentation, and documentation that claims a proof had
+// better have one.
+func TestExamples(t *testing.T) {
+	for name, want := range map[string]int{"isqrt": 1, "vego-tutorial": 15, "heap": 10} {
+		src, err := os.ReadFile("../../examples/" + name + ".lit.md")
+		if err != nil {
+			t.Skip(err)
+		}
+		diags, sum := Prove(lit.Parse(name+".lit.md", src).Tangle())
+		for _, d := range diags {
+			if d.Severity == lit.SevError {
+				t.Errorf("%s:%d: %s", name, d.Line+1, d.Message)
+			}
+		}
+		if sum.Proved != want || sum.Functions != want {
+			t.Errorf("%s: proved %d of %d, want %d", name, sum.Proved, sum.Functions, want)
+		}
+	}
+}
+
+// A failure is reported where the annotation is in the Markdown, and the
+// line it mentions is a line of the Markdown too.
+// litgo proves the arithmetic of its own source map. The test names the two
+// functions, so that deleting their annotations does not pass for a proof.
+func TestLitgoProvesItself(t *testing.T) {
+	src, err := os.ReadFile("../../litgo.lit.md")
+	if err != nil {
+		t.Skip(err)
+	}
+	diags, sum := Prove(lit.Parse("litgo.lit.md", src).Tangle())
+	for _, d := range diags {
+		if d.Severity == lit.SevError {
+			t.Errorf("litgo.lit.md:%d: %s", d.Line+1, d.Message)
+		}
+	}
+	proved := strings.Join(sum.Names, " ")
+	if !strings.Contains(proved, "Seg.out") || !strings.Contains(proved, "Seg.src") || sum.Proved != sum.Functions {
+		t.Errorf("proved %d of %d: %s", sum.Proved, sum.Functions, proved)
+	}
+}
+
+func TestProveMapsToTheDocument(t *testing.T) {
+	doc := "<!-- package: halve -->\n# Halving\n\n```go\nfunc Halve(n int) (h int) {\n\t// <<halve>>\n}\n//@ Ensures 2*h = n\n```\n\n" +
+		"<!-- chunk: halve -->\n```go\nreturn n / 2\n```\n"
+	diags, sum := Prove(lit.Parse("halve.lit.md", []byte(doc)).Tangle())
+	if sum.Proved != 0 || len(diags) != 1 {
+		t.Fatalf("diags = %+v, sum = %+v", diags, sum)
+	}
+	d := diags[0]
+	if d.Line != 7 || d.Source != "vego" || !strings.Contains(d.Message, "the return at line 13") {
+		t.Errorf("diag = %+v", d)
+	}
+}
+
+func TestOneLine(t *testing.T) {
+	expectProved(t, `
+type Seg struct{ OutCol, Len, SrcLine, SrcCol int }
+
+//@ Requires s.SrcCol <= col ^ col <= s.SrcCol + s.Len
+func (s Seg) out(col int) (c int) { return s.OutCol + col - s.SrcCol }
+//@ Ensures s.OutCol <= c ^ c <= s.OutCol + s.Len
+//@ Ensures s.src(c) = col
+
+//@ Requires s.OutCol <= col ^ col <= s.OutCol + s.Len
+func (s Seg) src(col int) (c int) { return s.SrcCol + col - s.OutCol }
+//@ Ensures s.SrcCol <= c ^ c <= s.SrcCol + s.Len
+//@ Ensures s.out(c) = col
+`, 2)
+}
+```
+
 # The command
 
 <!-- file: main.go -->
 <!-- package: main -->
-<!-- imports: encoding/json, flag, fmt, go/format, io, os, path/filepath, sort, strings, github.com/tlehman/litgo/internal/check, github.com/tlehman/litgo/internal/lit, github.com/tlehman/litgo/internal/lsp, github.com/tlehman/litgo/internal/weave -->
+<!-- imports: encoding/json, flag, fmt, go/format, io, os, path/filepath, sort, strings, github.com/tlehman/litgo/internal/check, github.com/tlehman/litgo/internal/lit, github.com/tlehman/litgo/internal/lsp, github.com/tlehman/litgo/internal/vego, github.com/tlehman/litgo/internal/weave -->
 
 Half of the commands are for people. The other half are the editor protocol,
 where the document arrives on standard input and JSON goes out. The document
@@ -6344,9 +11186,11 @@ as the file on disk.
 const usage = `litgo — literate Go
 
   litgo tangle [--force] [--stdout] FILE.lit.md...   write the Go source
-  litgo run    [--vet] [--timeout 30s] FILE [-- ARGS]  tangle, compile and run
+  litgo run    [--vet] [--no-prove] [--timeout 30s] FILE [-- ARGS]
+                                                     tangle, prove, compile and run
   litgo weave  [--to pdf|html|typ|md] [-o OUT] FILE  write a PDF through Typst, or a web page
-  litgo check  FILE.lit.md...                        chunk, syntax and type errors; writes nothing
+  litgo check  FILE.lit.md...                        chunk, syntax, type and proof errors; writes nothing
+  litgo prove  [--json] FILE.lit.md...               check the //@ annotations: contracts, invariants, termination
   litgo cat    FILE.lit.md                           print with math and diagrams rendered
   litgo fmt    [-w] FILE.lit.md                      gofmt the code blocks
 
@@ -6361,7 +11205,7 @@ Editor protocol (document on stdin, JSON on stdout):
 Positions in the editor protocol are 0-based; columns are bytes.
 `
 
-const VERSION = "0.1.6"
+const VERSION = "0.2.1"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -6378,6 +11222,8 @@ func main() {
 		os.Exit(cmdWeave(args))
 	case "check":
 		os.Exit(cmdCheck(args))
+	case "prove":
+		os.Exit(cmdProve(args))
 	case "cat":
 		os.Exit(cmdCat(args))
 	case "fmt":
@@ -6503,6 +11349,7 @@ func cmdRun(args []string) int {
 	fs.BoolVar(&o.json, "json", false, "emit one JSON event per line")
 	fs.BoolVar(&o.force, "force", false, "overwrite files litgo did not generate")
 	fs.BoolVar(&o.vet, "vet", false, "also run go vet")
+	fs.BoolVar(&o.noProve, "no-prove", false, "run even if the //@ annotations are not proved")
 	fs.DurationVar(&o.timeout, "timeout", 0, "kill the program after this long")
 	fs.Parse(args)
 	if fs.NArg() == 0 {
@@ -6582,8 +11429,76 @@ func cmdCheck(args []string) int {
 		if len(diags) == len(res.Diags) {
 			diags = append(diags, check.Types(res, cache)...)
 		}
+		if len(diags) == len(res.Diags) {
+			proofs, _ := vego.Prove(res)
+			diags = append(diags, proofs...)
+		}
 		if report(diags) > 0 {
 			status = 1
+		}
+	}
+	return status
+}
+```
+
+`prove` is the part of `check` that is about the `//@` annotations, with a
+count at the end, because after a proof the interesting news is good news and
+silence would not tell it. It checks the structure and the syntax first, since
+a proof about a program that does not parse is a proof about nothing. It does
+not wait for the type checker, though: the verifier reads types off the
+declarations, and a proof is worth having while an import is still missing.
+
+```go
+func cmdProve(args []string) int {
+	fs := flag.NewFlagSet("prove", flag.ExitOnError)
+	asJSON := fs.Bool("json", false, "print the findings and the count as JSON")
+	fs.Parse(args)
+	if fs.NArg() == 0 {
+		fmt.Fprintln(os.Stderr, "litgo prove: no input files")
+		return 2
+	}
+	status := 0
+	for _, path := range fs.Args() {
+		doc, err := load(path)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "litgo:", err)
+			status = 1
+			continue
+		}
+		res := doc.Tangle()
+		diags := append(res.Diags, res.SyntaxCheck()...)
+		var sum vego.Summary
+		if len(diags) == len(res.Diags) && !res.HasErrors() {
+			var proofs []lit.Diag
+			proofs, sum = vego.Prove(res)
+			diags = append(diags, proofs...)
+		}
+		failed := false
+		for _, d := range diags {
+			failed = failed || d.Severity == lit.SevError
+		}
+		if failed {
+			status = 1
+		}
+		if *asJSON {
+			if diags == nil {
+				diags = []lit.Diag{}
+			}
+			printJSON(map[string]any{"file": doc.Path, "diagnostics": diags, "functions": sum.Functions,
+				"proved": sum.Proved, "obligations": sum.Obligations, "names": sum.Names})
+			continue
+		}
+		report(diags)
+		switch {
+		case failed && sum.Functions == 0:
+		case sum.Functions == 0:
+			fmt.Fprintf(os.Stderr, "litgo: %s has no //@ annotations, so there is nothing to prove\n", relPath(doc.Path))
+		default:
+			fmt.Fprintf(os.Stderr, "litgo: %s: proved %d of %d annotated functions (%d obligations)\n",
+				relPath(doc.Path), sum.Proved, sum.Functions, sum.Obligations)
+			for _, name := range sum.Names {
+				fmt.Fprintf(os.Stderr, "  ✓ %s\n", name)
+			}
 		}
 	}
 	return status
@@ -6610,8 +11525,8 @@ func cmdCat(args []string) int {
 	blocks := map[int]lit.Item{}
 	inline := map[int][]lit.Item{}
 	for _, it := range a.Items {
-		if it.Kind == "table" {
-			continue // lining up a table is the editor's business
+		if it.Kind == "table" || it.Kind == "vego" {
+			continue // lining up a table and colouring an annotation are the editor's business
 		} else if len(it.Lines) > 0 {
 			blocks[it.Line] = it
 		} else {
@@ -6750,10 +11665,14 @@ func cmdRename(args []string) int {
 
 <!-- file: run.go -->
 <!-- package: main -->
-<!-- imports: bufio, bytes, encoding/json, fmt, io, os, os/exec, path/filepath, regexp, strconv, strings, time, github.com/tlehman/litgo/internal/lit -->
+<!-- imports: bufio, bytes, encoding/json, fmt, io, os, os/exec, path/filepath, regexp, strconv, strings, time, github.com/tlehman/litgo/internal/lit, github.com/tlehman/litgo/internal/vego -->
 
-`litgo run` is the reason everything above exists. It tangles, compiles and
-runs the program, and reports every position in terms of the document.
+`litgo run` is the reason everything above exists. It tangles, proves,
+compiles and runs the program, and reports every position in terms of the
+document. The stages are in order of cost, and each one stops the run if it
+fails: a chunk that does not exist costs microseconds to find, a broken
+invariant milliseconds, a type error a compiler, and a wrong answer a whole
+execution and somebody paying attention.
 
 ```mermaid
 sequenceDiagram
@@ -6762,6 +11681,8 @@ sequenceDiagram
     participant G as go build
     participant P as program
     E->>L: pool.lit.md
+    L->>L: prove the //@ annotations of pool.go
+    L-->>E: pool.lit.md:80:1: Invariant is not maintained
     L->>G: pool.go
     G-->>L: pool.go:31:14: undefined: jobb
     L-->>E: pool.lit.md:67:15: undefined: jobb
@@ -6771,7 +11692,10 @@ sequenceDiagram
 ```
 
 Progress goes to a person as text, or to an editor as one JSON event per line.
-The events are `tangle`, `diagnostic`, `build`, `output` and `exit`.
+The events are `tangle`, `prove`, `diagnostic`, `build`, `output` and `exit`.
+A failed proof is a `diagnostic` like a compile error, told apart by its
+`source`, which is `vego`. An editor can use that to show the two differently,
+and the Neovim plugin does.
 
 The reporter has no lock, so only one goroutine is allowed to use it. That is
 the goroutine that runs `runFile`. When a program's output has to be read from
@@ -6986,6 +11910,7 @@ type runOptions struct {
 	json    bool
 	force   bool
 	vet     bool
+	noProve bool
 	timeout time.Duration
 	args    []string
 }
@@ -7043,7 +11968,7 @@ half a program.
 
 <!-- chunk: tangle and write every document -->
 ```go
-ok := true
+ok, unproved := true, false
 for _, d := range docs {
 	res := d.Tangle()
 	for _, dg := range res.Diags {
@@ -7068,10 +11993,45 @@ for _, d := range docs {
 		r.emit("tangle", map[string]any{"file": d.Path, "out": fmt.Sprintf("%d files", n)})
 		r.status("tangled %s → %d files", relPath(d.Path), n)
 	}
+	// <<prove what is annotated>>
 }
 if !ok {
-	r.emit("build", map[string]any{"ok": false, "ms": 0, "stage": "tangle"})
+	stage := "tangle"
+	if unproved {
+		stage = "prove"
+		r.status("not proved, so not run (--no-prove runs it anyway)")
+	}
+	r.emit("build", map[string]any{"ok": false, "ms": 0, "stage": stage})
 	return 1
+}
+```
+
+A document with `//@` annotations is proved before it is compiled. The order
+is deliberate. A proof needs no compiler and takes milliseconds, and a program
+whose contract does not hold is not a program anyone asked to see run: the
+output of a wrong `Divide` is a distraction from the line that says its
+invariant is not maintained. So a failed proof stops the run, the same way a
+compile error does, and is reported the same way, as a diagnostic at a line of
+the Markdown with `vego` as its source. `--no-prove` is for the times when
+watching it run is how you find out what the invariant should have been.
+
+<!-- chunk: prove what is annotated -->
+```go
+if !o.noProve {
+	start := time.Now()
+	proofs, sum := vego.Prove(res)
+	for _, dg := range proofs {
+		r.diag(dg)
+		if dg.Severity == lit.SevError {
+			ok, unproved = false, true
+		}
+	}
+	if sum.Functions > 0 {
+		r.emit("prove", map[string]any{"file": d.Path, "functions": sum.Functions, "proved": sum.Proved,
+			"obligations": sum.Obligations, "ms": time.Since(start).Milliseconds()})
+		r.status("proved %d of %d annotated functions in %s (%d obligations, %d ms)", sum.Proved, sum.Functions,
+			relPath(d.Path), sum.Obligations, time.Since(start).Milliseconds())
+	}
 }
 ```
 
@@ -7354,7 +12314,9 @@ memory*, it reports what the compiler would report (an undefined name, a wrong
 argument, an unused variable, an unused import) in a few milliseconds, and the
 source map puts each report on the right line of the Markdown. A language
 server runs that check after every change, so the errors show up under the code
-that caused them before you have even thought about running anything.
+that caused them before you have even thought about running anything. The
+verifier works the same way, on the same files in memory, so a document with
+`//@` annotations is proved after every change too.
 
 ```mermaid
 sequenceDiagram
@@ -7366,6 +12328,8 @@ sequenceDiagram
     S->>T: the tangled files, never written
     T-->>S: pool.go:31:14: undefined: jobb
     S-->>E: pool.lit.md:67:15: undefined: jobb
+    S->>S: prove the //@ annotations, once the types are right
+    S-->>E: pool.lit.md:80:1: Invariant is not maintained
 ```
 
 ## Type-checking what is not on disk
@@ -7755,7 +12719,7 @@ func TestSingleProgramStandsAlone(t *testing.T) {
 
 <!-- file: internal/lsp/lsp.go -->
 <!-- package: lsp -->
-<!-- imports: bufio, encoding/json, fmt, io, net/url, strconv, strings, time, github.com/tlehman/litgo/internal/check, github.com/tlehman/litgo/internal/lit -->
+<!-- imports: bufio, encoding/json, fmt, io, net/url, strconv, strings, time, github.com/tlehman/litgo/internal/check, github.com/tlehman/litgo/internal/lit, github.com/tlehman/litgo/internal/vego -->
 
 The Language Server Protocol is JSON-RPC over standard input and output, with a
 `Content-Length` header in front of each message. The part litgo needs for
@@ -8074,6 +13038,14 @@ each document in `waiting`, and a newer job replaces an older one. When the
 checker sends its job back, the loop publishes the findings unless the document
 has changed in the meantime, and then starts the next job.
 
+A document with `//@` annotations gets a third round, in the same goroutine,
+once the types are in order: the [proofs](#proofs). A proof about a program
+with a type error would be a second opinion about code that is about to
+change, so it waits. It costs milliseconds, which is what makes it a thing to
+do as you type rather than a thing to remember to do: strengthen an invariant,
+and the violet line under the `Ensures` goes away before you have reached for
+a command.
+
 ```go
 // job is a type check: what to check, and then what the check found. The
 // loop and the checker pass it back and forth and never hold it together.
@@ -8114,6 +13086,9 @@ func (s *server) check() {
 		s.checking = true
 		go func() {
 			j.typed = check.Types(j.res, &s.cache)
+			if len(j.typed) == 0 {
+				j.typed, _ = vego.Prove(j.res)
+			}
 			select {
 			case s.checked <- j:
 			case <-s.quit:
@@ -9441,11 +14416,12 @@ Another editor would need the same four calls and nothing else.
 
 | Command | Key | |
 |---|---|---|
-| *(nothing)* | | Chunk, syntax and type errors show up under the offending line as you type, from `litgo lsp`. |
+| *(nothing)* | | Chunk, syntax and type errors show up under the offending line as you type, from `litgo lsp`. So do failed proofs of `//@` annotations, in violet. The annotations themselves are violet in the code, and their formulas are typeset like the math in the prose: `lo*lo <= n ^ n < hi*hi` reads $lo^2 \leq n \land n < hi^2$ until the cursor is on the line. |
 | *(what Neovim has for any language server)* | `K`, `grr`, `grn`, `<C-x><C-o>`, `<C-s>` | In a Go block the buffer acts like a Go buffer. You get gopls's completion, documentation, references, rename and signature help, through `litgo lsp`. |
 | `:TangleCompileAndRun [args]` | `\r` | Saves, tangles, compiles and runs. Panics and failing tests land in the Markdown too, and the cursor goes to the first error. |
 | `:'<,'>Untangle [name]` | `\u` | Moves the selection into a chunk at the bottom and leaves a reference. |
 | `:RenameChunk [name]` | `\n` | Renames the chunk under the cursor, everywhere. |
+| `:Prove` | `\p` | Saves and checks the `//@` annotations, without compiling or running. |
 | `:Tangle[!]`, `:Weave [html]` | `\t`, `\w` | `:Tangle` writes the sources. `:Weave` writes and opens the PDF, or the web page. |
 | `gd`, `K` | | On a chunk, `gd` goes from a reference to the definition and from a definition to the uses, and `K` previews the chunk. On Go they do what they do in Go. |
 | `:LitWatch`, `:LitStop`, `:LitClear`, `:LitRender` | | Run on save, kill the program, clear diagnostics, toggle rendering. |
@@ -9488,6 +14464,7 @@ M.config = {
     math = true,
     mermaid = true,
     tables = true, -- line up the columns of Markdown tables
+    proofs = true, -- typeset the formulas of //@ annotations: ^ as ∧, <= as ≤, Forall as ∀
     chunks = true, -- show `// <<name>>` as ⟨name⟩ and chunk directives as ⟨name⟩ ≡
     conceal_source = true, -- hide diagram/display-math source while the cursor is elsewhere
     upright = false, -- true: keep math letters upright instead of 𝑖𝑡𝑎𝑙𝑖𝑐
@@ -9503,7 +14480,7 @@ M.config = {
     panel_height = 12,
   },
   lsp = {
-    enabled = true, -- run `litgo lsp`: chunk, syntax and type errors as you type
+    enabled = true, -- run `litgo lsp`: chunk, syntax, type and proof errors as you type
     virtual_lines = true, -- show them under the offending line rather than beside it
     gopls = true, -- completion, hover, definitions, references, rename in Go blocks; or a path, or false
     settings = nil, -- gopls settings, e.g. { buildFlags = { "-tags=integration" } }
@@ -9517,6 +14494,7 @@ M.config = {
     stop = "<localleader>s",
     tangle = "<localleader>t",
     weave = "<localleader>w",
+    prove = "<localleader>p",
     untangle = "<localleader>u", -- visual mode
     rename = "<localleader>n",
     toggle_render = "<localleader>v",
@@ -9613,6 +14591,32 @@ local function define_highlights()
   for name, target in pairs(links) do
     vim.api.nvim_set_hl(0, name, { link = target, default = true })
   end
+  -- <<the colour of a proof>>
+end
+```
+
+Everything about proofs is violet: the `//@` annotations in the code, and what
+the verifier has to say about them. No colour scheme has a group for that, and
+the point of the colour is that it is not one of the others. A red line under
+code says the compiler will not take it, a yellow one that `go vet` frowns. A
+violet one says something of a different kind: this compiles, it runs, and it
+has not been shown to do what it promises. The groups are defined with
+`default`, so a colour scheme or a user who disagrees about violet wins.
+
+<!-- chunk: the colour of a proof -->
+```lua
+local dark = vim.o.background ~= "light"
+local violet = dark and "#c792ea" or "#7c3aed"
+local faded = dark and "#a58fc4" or "#8b6fc0"
+for name, spec in pairs({
+  LitgoProofKeyword = { fg = violet, bold = true },
+  LitgoProof = { fg = faded },
+  LitgoProofError = { fg = violet },
+  LitgoProofWarn = { fg = faded, italic = true },
+  LitgoProofUnderline = { undercurl = true, sp = violet },
+}) do
+  spec.default = true
+  vim.api.nvim_set_hl(0, name, spec)
 end
 ```
 
@@ -9673,6 +14677,9 @@ function M.attach(buf)
   command("TangleCompileAndRun", function(o)
     run.run(buf, o.fargs)
   end, { nargs = "*", desc = "Tangle, compile and run; errors appear inline" })
+  command("Prove", function()
+    run.prove(buf)
+  end, { desc = "Check the //@ annotations: contracts, invariants, termination" })
   command("LitStop", function()
     run.stop()
   end, { desc = "Kill the running program" })
@@ -9703,6 +14710,7 @@ function M.attach(buf)
   map("n", keys.stop, "<cmd>LitStop<cr>", "stop the program")
   map("n", keys.tangle, "<cmd>Tangle<cr>", "tangle")
   map("n", keys.weave, "<cmd>Weave<cr>", "weave")
+  map("n", keys.prove, "<cmd>Prove<cr>", "prove the annotations")
   map("x", keys.untangle, ":Untangle<cr>", "untangle selection into a chunk")
   map("n", keys.rename, "<cmd>RenameChunk<cr>", "rename chunk")
   map("n", keys.toggle_render, "<cmd>LitRender<cr>", "toggle rendering")
@@ -9727,6 +14735,7 @@ function M.setup(opts)
   M.config = vim.tbl_deep_extend("force", M.config, opts or {})
   M._bin = nil
   define_highlights()
+  require("litgo.proof").setup()
   local group = vim.api.nvim_create_augroup("litgo", { clear = true })
   vim.api.nvim_create_autocmd({ "BufReadPost", "BufNewFile", "BufWinEnter" }, {
     group = group,
@@ -9794,6 +14803,8 @@ local function wanted(item, cfg)
     return cfg.mermaid
   elseif item.kind == "table" then
     return cfg.tables
+  elseif item.kind == "vego-math" then
+    return cfg.proofs
   end
   return cfg.chunks
 end
@@ -9823,7 +14834,18 @@ function M.draw(buf)
   local last = vim.api.nvim_buf_line_count(buf) - 1
 
   for _, it in ipairs(st.items) do
-    if wanted(it, cfg) then
+    if it.kind == "vego" then
+      -- An annotation keeps its colour under the cursor too: nothing is
+      -- hidden, so there is nothing to reveal.
+      local key_end = it.col + 3
+      if it.name and it.name ~= "" then
+        local line = vim.api.nvim_buf_get_lines(buf, it.line, it.line + 1, false)[1] or ""
+        local _, e = line:find(it.name, it.col + 4, true)
+        key_end = e or key_end
+      end
+      mark(buf, it.line, it.col, { end_col = key_end, hl_group = "LitgoProofKeyword", priority = 210 })
+      mark(buf, it.line, key_end, { end_col = it.end_col, hl_group = "LitgoProof", priority = 210 })
+    elseif wanted(it, cfg) then
       local under_cursor = cursor >= it.line and cursor <= it.end_line
       if it.lines then
         -- <<draw a diagram or a displayed formula>>
@@ -9926,7 +14948,7 @@ end
 
 <!-- chunk: draw inline math or a chunk name -->
 ```lua
-local hl = ({ math = "LitgoMath", file = "LitgoFile" })[it.kind] or "LitgoChunk"
+local hl = ({ math = "LitgoMath", file = "LitgoFile", ["vego-math"] = "LitgoProof" })[it.kind] or "LitgoChunk"
 if it.info == "undefined" then
   hl = "LitgoError"
 end
@@ -10089,7 +15111,7 @@ function M.attach(buf)
       state[buf] = nil
     end,
   })
-  vim.diagnostic.config({ virtual_text = true, signs = true, underline = true }, check_ns)
+  vim.diagnostic.config({ virtual_text = true, signs = true, underline = true, [require("litgo.proof").handler] = true }, check_ns)
   window_options(buf)
   M.refresh(buf)
 end
@@ -10248,10 +15270,11 @@ local function publish(diags, origin)
   for file, list in pairs(by_file) do
     local buf = vim.fn.bufadd(file)
     vim.fn.bufload(buf)
-    -- What the compiler says, the language server has usually said already.
+    -- What the compiler and the verifier say, the language server has usually
+    -- said already.
     if require("litgo.lsp").reporting(buf) then
       list = vim.tbl_filter(function(d)
-        return d.source ~= "go build"
+        return d.source ~= "go build" and d.source ~= "vego"
       end, list)
     end
     vim.diagnostic.set(run_ns, buf, require("litgo.render").to_diagnostics(list, buf))
@@ -10275,6 +15298,7 @@ function M.attach(buf)
     signs = true,
     underline = true,
     severity_sort = true,
+    [require("litgo.proof").handler] = true,
   }, run_ns)
   -- Several edits can arrive before the scheduled update runs (a macro, a
   -- :global command), so each works on the result of the one before.
@@ -10368,6 +15392,33 @@ function M.weave(buf, format)
   end)
 end
 
+--- Check the //@ annotations without compiling or running anything.
+function M.prove(buf)
+  local bin = litgo().bin()
+  if not bin then
+    return
+  end
+  save(buf)
+  M.clear(buf)
+  vim.system({ bin, "prove", "--json", vim.api.nvim_buf_get_name(buf) }, { text = true }, function(res)
+    vim.schedule(function()
+      local ok, decoded = pcall(vim.json.decode, res.stdout or "")
+      if not ok or type(decoded) ~= "table" then
+        vim.notify("litgo: prove failed\n" .. (res.stderr or ""), vim.log.levels.ERROR)
+        return
+      end
+      publish(decoded.diagnostics or {}, buf)
+      vim.g.litgo_last_proof = ("%d/%d"):format(decoded.proved, decoded.functions)
+      local level = decoded.proved == decoded.functions and vim.log.levels.INFO or vim.log.levels.WARN
+      if decoded.functions == 0 then
+        vim.notify("litgo: no //@ annotations, so nothing to prove")
+      else
+        vim.notify(("litgo: ∴ proved %d of %d annotated functions (%d obligations)"):format(decoded.proved, decoded.functions, decoded.obligations), level)
+      end
+    end)
+  end)
+end
+
 function M.stop()
   if job then
     job:kill("sigterm")
@@ -10411,12 +15462,20 @@ function M.run(buf, args)
     elseif ev.event == "diagnostic" then
       diags[#diags + 1] = ev
       local where = ev.file and (ev.file .. ":" .. (ev.line + 1) .. ":" .. (ev.col + 1) .. ": ") or ""
-      panel_add(where .. ev.message, ev.severity == 1 and "LitgoError" or "DiagnosticWarn")
+      local hl = ev.severity == 1 and "LitgoError" or "DiagnosticWarn"
+      if require("litgo.proof").is_proof(ev) then
+        hl = ev.severity == 1 and "LitgoProofError" or "LitgoProofWarn"
+      end
+      panel_add(where .. ev.message, hl)
+    elseif ev.event == "prove" then
+      local all = ev.proved == ev.functions
+      panel_add(("∴ proved %d of %d annotated functions (%d obligations, %d ms)"):format(ev.proved, ev.functions, ev.obligations, ev.ms), all and "LitgoProofKeyword" or "LitgoProofError")
     elseif ev.event == "build" then
       if ev.ok then
         panel_add(("✓ built in %d ms"):format(ev.ms), "LitgoOk")
       else
-        panel_add("✗ " .. (ev.stage == "tangle" and "tangle failed" or "build failed"), "LitgoError")
+        local what = { tangle = "tangle failed", prove = "not proved, so not run" }
+        panel_add("✗ " .. (what[ev.stage] or "build failed"), ev.stage == "prove" and "LitgoProofError" or "LitgoError")
       end
     elseif ev.event == "output" then
       panel_add(ev.text, ev.stream == "stderr" and "DiagnosticWarn" or nil)
@@ -10576,6 +15635,7 @@ function M.start(buf)
         virtual_lines = cfg.virtual_lines,
         virtual_text = not cfg.virtual_lines,
         severity_sort = true,
+        [require("litgo.proof").handler] = true,
       }, vim.lsp.diagnostic.get_namespace(client.id))
       if cfg.completion == "auto" then
         complete_with(client.id, bufnr)
@@ -10605,6 +15665,108 @@ function M.reporting(buf)
         severity = vim.diagnostic.severity.ERROR,
       })
       > 0
+end
+
+return M
+```
+
+## Proofs in their own colour
+
+<!-- file: lua/litgo/proof.lua -->
+
+Neovim colours a diagnostic by its severity and by nothing else, so a failed
+proof would look like a compile error. It should not, because it is a
+different kind of news and calls for a different kind of fix: not the code
+the compiler choked on, but an invariant that says too little.
+
+Diagnostics are drawn by handlers, and handlers can be replaced. The ones that
+draw (signs, underlines, virtual text, virtual lines) are wrapped so that in a
+`.lit.md` buffer they never see a diagnostic whose source is `vego`, and one
+more handler draws exactly those: a violet undercurl, a `∴` in the sign
+column, and the message in violet under the line. They are still ordinary
+diagnostics in every other way, so `]d`, the quickfix list and the location
+list all know about them.
+
+```lua
+-- Diagnostics from the verifier, drawn apart from the compiler's.
+local M = {}
+
+M.handler = "litgo/proof"
+
+local drawn = {} -- diagnostic namespace -> extmark namespace
+
+function M.is_proof(d)
+  return type(d.source) == "string" and d.source:find("vego", 1, true) ~= nil
+end
+
+local function draw(buf, ns, d)
+  local line = vim.api.nvim_buf_get_lines(buf, d.lnum, d.lnum + 1, false)[1] or ""
+  local warn = d.severity ~= vim.diagnostic.severity.ERROR
+  local hl = warn and "LitgoProofWarn" or "LitgoProofError"
+  local pad = string.rep(" ", vim.fn.strdisplaywidth(line:match("^%s*")))
+  local lines = {}
+  for i, text in ipairs(vim.split(d.message, "\n")) do
+    lines[i] = { { pad .. (i == 1 and "└─ ∴ " or "     ") .. text, hl } }
+  end
+  local end_col = math.min(d.end_col or #line, #line)
+  pcall(vim.api.nvim_buf_set_extmark, buf, ns, d.lnum, math.min(d.col, #line), {
+    end_col = math.max(end_col, math.min(d.col, #line)),
+    hl_group = not warn and "LitgoProofUnderline" or nil,
+    sign_text = "∴",
+    sign_hl_group = hl,
+    virt_lines = lines,
+    priority = 220,
+    strict = false,
+  })
+end
+
+--- Install the handler, and keep the built-in ones away from proofs.
+function M.setup()
+  if vim.diagnostic.handlers[M.handler] then
+    return
+  end
+  local function is_lit(buf)
+    return require("litgo").is_lit(buf)
+  end
+  vim.diagnostic.handlers[M.handler] = {
+    show = function(namespace, buf, diagnostics)
+      drawn[namespace] = drawn[namespace] or vim.api.nvim_create_namespace("litgo-proof-" .. namespace)
+      vim.api.nvim_buf_clear_namespace(buf, drawn[namespace], 0, -1)
+      if not is_lit(buf) then
+        return
+      end
+      for _, d in ipairs(diagnostics) do
+        if M.is_proof(d) then
+          draw(buf, drawn[namespace], d)
+        end
+      end
+    end,
+    hide = function(namespace, buf)
+      if drawn[namespace] and vim.api.nvim_buf_is_valid(buf) then
+        vim.api.nvim_buf_clear_namespace(buf, drawn[namespace], 0, -1)
+      end
+    end,
+  }
+  for _, name in ipairs({ "signs", "underline", "virtual_text", "virtual_lines" }) do
+    local builtin = vim.diagnostic.handlers[name]
+    if builtin then
+      vim.diagnostic.handlers[name] = {
+        show = function(namespace, buf, diagnostics, opts)
+          if is_lit(buf) then
+            diagnostics = vim.tbl_filter(function(d)
+              return not M.is_proof(d)
+            end, diagnostics)
+          end
+          builtin.show(namespace, buf, diagnostics, opts)
+        end,
+        hide = function(namespace, buf)
+          if builtin.hide then
+            builtin.hide(namespace, buf)
+          end
+        end,
+      }
+    end
+  end
 end
 
 return M
@@ -10797,8 +15959,10 @@ return M
 
 Headless Neovim drives the real plugin against the real binary. The test covers
 rendering, both kinds of untangling, renaming, a run that succeeds, a run with
-an error inside a chunk, diagnostics that follow edits, and a table whose
-columns get lined up.
+an error inside a chunk, diagnostics that follow edits, a table whose columns
+get lined up, and a proof: annotations in their own colour, an invariant that
+is broken and reported in violet while the compiler stays quiet, a run that
+refuses to go past it, and `:Prove`.
 
 ```sh
 go build -o bin/litgo . && nvim --headless -u NONE -l test/plugin.lua
@@ -11113,6 +16277,101 @@ check(shown(5):find("completes               |", 1, true) ~= nil, "and the other
 vim.cmd("bwipeout!")
 
 vim.fn.delete(dir, "rf")
+-- Proofs ---------------------------------------------------------------------------
+local pdir = vim.fn.tempname()
+vim.fn.mkdir(pdir, "p")
+local pfile = pdir .. "/isqrt.lit.md"
+vim.fn.writefile(vim.fn.readfile(root .. "/examples/isqrt.lit.md"), pfile)
+vim.cmd.edit(pfile)
+local pbuf = vim.api.nvim_get_current_buf()
+wait(3000, function()
+  local st = render.get(pbuf)
+  return st and st.items ~= nil
+end, "analysis of the proved example")
+local keywords, formulas = 0, 0
+for _, m in ipairs(vim.api.nvim_buf_get_extmarks(pbuf, ns, 0, -1, { details = true })) do
+  if m[4].hl_group == "LitgoProofKeyword" then keywords = keywords + 1 end
+  if m[4].hl_group == "LitgoProof" then formulas = formulas + 1 end
+end
+check(keywords == 5 and formulas == 5, "the five annotations have a colour of their own (" .. keywords .. ")")
+local inv = find(pbuf, "//@ Invariant lo*lo")
+local km = vim.api.nvim_buf_get_extmarks(pbuf, ns, { inv - 1, 0 }, { inv - 1, -1 }, { details = true })[1]
+check(km and km[3] == 0 and km[4].end_col == #"//@ Invariant", "the keyword is set apart from the formula")
+
+-- The formula is typeset like the math in the prose, except under the cursor.
+local function typeset(row)
+  local text, hidden
+  for _, m in ipairs(vim.api.nvim_buf_get_extmarks(pbuf, ns, { row, 0 }, { row, -1 }, { details = true })) do
+    if m[4].virt_text_pos == "inline" then text = m[4].virt_text[1][1] end
+    if m[4].conceal then hidden = { m[3], m[4].end_col } end
+  end
+  return text, hidden
+end
+vim.api.nvim_win_set_cursor(0, { 1, 0 })
+render.draw(pbuf)
+local text, hidden = typeset(inv - 1)
+check(text == "𝑙𝑜² ≤ 𝑛 ∧ 𝑛 < ℎ𝑖²", "a formula is typeset: " .. tostring(text))
+check(hidden and hidden[1] == #"//@ Invariant " and hidden[2] == #"//@ Invariant lo*lo <= n ^ n < hi*hi", "in place of its source, and the keyword stays")
+vim.api.nvim_win_set_cursor(0, { inv, 0 })
+render.draw(pbuf)
+check(typeset(inv - 1) == nil, "and the source comes back under the cursor")
+vim.api.nvim_win_set_cursor(0, { 1, 0 })
+
+local function proof_marks()
+  local out = {}
+  for name, id in pairs(vim.api.nvim_get_namespaces()) do
+    if name:find("litgo-proof-", 1, true) then
+      vim.list_extend(out, vim.api.nvim_buf_get_extmarks(pbuf, id, 0, -1, { details = true }))
+    end
+  end
+  return out
+end
+local function proofs()
+  return vim.tbl_filter(require("litgo.proof").is_proof, vim.diagnostic.get(pbuf))
+end
+wait(10000, function() return require("litgo.lsp").active(pbuf) end, "the server on the proved example")
+check(#proofs() == 0 and #proof_marks() == 0, "a proved document has nothing violet under it")
+
+-- Break the bisection. It still compiles, so only the verifier can object.
+local lo = find(pbuf, "\tlo = mid")
+vim.api.nvim_buf_set_lines(pbuf, lo - 1, lo, false, { "\tlo = mid + 1" })
+wait(15000, function() return #proofs() == 2 end, "the verifier's objections")
+local failed = proofs()
+check(#failed == 2 and failed[1].lnum == inv - 2 and failed[1].message:find("Invariant is not maintained", 1, true) ~= nil,
+  "a broken invariant is reported at the invariant, as you type")
+check(#vim.diagnostic.get(pbuf) == 2, "and the compiler has nothing to add")
+local violet = proof_marks()
+check(#violet == 2 and violet[1][4].hl_group == "LitgoProofUnderline" and violet[1][4].virt_lines[1][1][2] == "LitgoProofError"
+  and vim.trim(violet[1][4].sign_text) == "∴", "it is drawn in the proof colour, not the compiler's")
+-- Neovim keeps marks of its own to follow a diagnostic through edits; what
+-- counts is a mark that draws something.
+local builtin = 0
+for name, id in pairs(vim.api.nvim_get_namespaces()) do
+  if not name:find("litgo-", 1, true) then
+    for _, m in ipairs(vim.api.nvim_buf_get_extmarks(pbuf, id, 0, -1, { details = true })) do
+      local d = m[4]
+      if d.hl_group or d.virt_text or d.virt_lines or d.sign_text then
+        builtin = builtin + 1
+      end
+    end
+  end
+end
+check(builtin == 0, "and the built-in handlers leave it alone")
+
+-- A run refuses to go further than the proof.
+vim.cmd("TangleCompileAndRun")
+wait(20000, function() return panel_text():find("not proved, so not run", 1, true) ~= nil end, "the run that is not proved")
+check(panel_text():find("proved 0 of 1", 1, true) ~= nil, "a run stops at a failed proof")
+check(panel_text():find("isqrt(", 1, true) == nil, "and the program was not run")
+
+vim.api.nvim_set_current_buf(pbuf)
+vim.api.nvim_buf_set_lines(pbuf, lo - 1, lo, false, { "\tlo = mid" })
+wait(15000, function() return #proofs() == 0 and #proof_marks() == 0 end, "the proof to come back")
+check(#proofs() == 0, "fixing the code takes the violet away")
+vim.cmd("Prove")
+wait(10000, function() return vim.g.litgo_last_proof ~= nil end, ":Prove")
+check(vim.g.litgo_last_proof == "1/1", ":Prove proves it without running it")
+
 print(failures == 0 and "\nall passed" or ("\n" .. failures .. " failed"))
 os.exit(failures == 0 and 0 or 1)
 ```
@@ -11269,6 +16528,937 @@ fmt.Printf("%d of %d jobs finished\n", done, m)
 ````
 
 
+# An example with a proof
+
+The second example is as small as a proved program gets and still says
+something: an integer square root by bisection, with a contract, an invariant
+and a variant. It is the file to open to see what [Proofs](#proofs) looks like
+from the outside. The tests prove it, and the plugin's test breaks it to see
+the editor object.
+
+<!-- file: examples/isqrt.lit.md -->
+<!-- verbatim -->
+````markdown
+<!-- tangler: go -->
+<!-- package: main -->
+<!-- imports: fmt -->
+
+# A square root you can trust
+
+The integer square root of $n$ is the largest integer whose square does not
+exceed $n$:
+
+$$
+r = \lfloor \sqrt{n} \rfloor \quad\Longleftrightarrow\quad r^2 \le n < (r+1)^2
+$$
+
+This program finds it by bisection, and it comes with a proof. Not a test that
+it gets $\sqrt{17}$ right, but a proof that the inequality on the right holds
+for the result of *every* call with $n \ge 0$, that the loop always stops, and
+that the division in it can never divide by zero. The proof is written in the
+`//@` comments, in the notation of
+[VeGo](https://arxiv.org/abs/2608.22630), and `litgo run` checks it before it
+compiles anything:
+
+```sh
+litgo run   examples/isqrt.lit.md    # prove, then compile, then run
+litgo prove examples/isqrt.lit.md    # only prove
+```
+
+```mermaid
+flowchart LR
+    doc[isqrt.lit.md] -->|tangle| go[isqrt.go]
+    go -->|prove| ok{proved?}
+    ok -->|yes| build[go build, run]
+    ok -->|no| line[a violet line under the annotation that failed]
+```
+
+## The contract
+
+The function promises the defining inequality, and asks for one thing in
+return. `Requires` is what the caller owes, `Ensures` is what the function
+owes back, and the result has a name, `r`, so that the promise can mention it.
+
+```go
+//@ Requires n >= 0
+func Isqrt(n int) (r int) {
+	// <<bisect>>
+}
+//@ Ensures r*r <= n ^ n < (r+1)*(r+1)
+```
+
+`^` is *and*. The `Ensures` goes under the closing brace, where a conclusion
+belongs.
+
+## The loop
+
+Bisection keeps two numbers, one whose square is known to be small enough and
+one whose square is known to be too big, and moves one of them to the middle
+until they are neighbours.
+
+<!-- chunk: bisect -->
+```go
+lo, hi := 0, n+1
+//@ Invariant 0 <= lo < hi
+//@ Invariant lo*lo <= n ^ n < hi*hi
+//@ Variant hi - lo
+for hi-lo > 1 {
+	mid := lo + (hi-lo)/2
+	// <<move whichever end the middle can replace>>
+}
+return lo
+```
+
+The sentence above *is* the invariant: `lo*lo <= n ^ n < hi*hi`. A loop
+invariant is something true before the loop and true again after each time
+round, and the verifier checks exactly those two things. It is true before,
+because $0 \le n$ and $n < (n+1)^2$. Then the verifier forgets everything it
+knew about `lo` and `hi` except the invariant, goes round once, and has to get
+the invariant back.
+
+<!-- chunk: move whichever end the middle can replace -->
+```go
+if mid*mid <= n {
+	lo = mid
+} else {
+	hi = mid
+}
+```
+
+Whichever branch runs, the test it just made is word for word the half of the
+invariant it has to restore, so that part is immediate. The other line of the
+invariant, `0 <= lo < hi`, needs the middle to be strictly between the ends,
+and that is where the loop condition earns its keep: `hi - lo > 1` means
+`(hi-lo)/2` is at least 1 and less than `hi - lo`.
+
+The same fact proves that the loop stops. The `Variant` is a quantity that is
+never negative while the loop runs and gets smaller on every round. Here it is
+the width of the interval, and both branches narrow it.
+
+After the loop the verifier knows the invariant and that the condition is
+false. From `lo < hi` and not `hi - lo > 1` it follows that `hi = lo + 1`, and
+putting that into `n < hi*hi` gives the `Ensures`. Nobody had to say so: those
+few lines of arithmetic are what the prover is for.
+
+## What the proof does not say
+
+The integers of the proof are the integers of mathematics. Go's `int` has 64
+bits, and `(n+1)*(n+1)` overflows long before `n` runs out of them. For
+$n < 3 \cdot 10^9$ the two agree; beyond that, the theorem is about a program
+this one only resembles. VeGo makes the same simplification, and it is the
+kind of thing worth knowing about a proof before leaning on it.
+
+## Running it
+
+`main` has no annotations, so the verifier leaves it alone: a program can be
+proved one function at a time.
+
+```go
+func main() {
+	for _, n := range []int{0, 1, 2, 15, 16, 17, 1_000_000, 2_147_395_599} {
+		fmt.Printf("isqrt(%d) = %d\n", n, Isqrt(n))
+	}
+}
+```
+
+## Breaking it
+
+The quickest way to believe a verifier is to lie to it. Change `lo = mid` to
+`lo = mid + 1`, which looks like the usual bisection and is wrong here, and
+run it again:
+
+```text
+isqrt.lit.md:61:1: error: Invariant is not maintained by the body of the loop at line 64: 0 <= lo < hi
+isqrt.lit.md:62:1: error: Invariant is not maintained by the body of the loop at line 64: lo*lo <= n ^ n < hi*hi
+litgo: proved 0 of 1 annotated functions in isqrt.lit.md (11 obligations, 79 ms)
+litgo: not proved, so not run (--no-prove runs it anyway)
+```
+
+Both complaints are right. `(mid+1)*(mid+1) <= n` is not what the test
+established, and `mid + 1` can be `hi` itself, which leaves the interval
+empty. In the editor the two lines are violet rather than red, because the
+program still compiles: it is the argument that is broken, not the syntax.
+
+Or weaken the loop condition to `hi-lo > 0`, and the verifier points at the
+`Variant`: with an interval of width one the middle is `lo`, nothing moves,
+and the loop never ends. A test would have hung. The proof just says no.
+````
+
+# A tutorial in proofs
+
+The third is a tour of every annotation the verifier checks, one small
+function at a time, ending with binary search. Every function in it is proved
+by the tests, so the tutorial cannot drift away from the verifier it
+describes.
+
+<!-- file: examples/vego-tutorial.lit.md -->
+<!-- verbatim -->
+````markdown
+<!-- tangler: go -->
+<!-- package: main -->
+<!-- imports: fmt -->
+
+# VeGo in litgo: a tutorial
+
+[VeGo](https://arxiv.org/abs/2608.22630) (Verified Go, by Tina Massoudi and
+Chris Dutchyn) is a way of writing down what a Go function promises, and why
+its loops are right, in comments that start with `//@`. The program stays
+ordinary Go. litgo reads the comments and proves them, or tells you which one
+it could not prove and for which line of code.
+
+This document is a tour of every annotation litgo checks, one small function
+at a time. Every function here is proved each time the document is run:
+
+```sh
+litgo prove examples/vego-tutorial.lit.md   # prove, and list what was proved
+litgo run   examples/vego-tutorial.lit.md   # prove, then compile and run
+litgo check examples/vego-tutorial.lit.md   # chunks, syntax, types, proofs
+```
+
+In Neovim the annotations are violet and their formulas are typeset, so that
+`^` reads ∧, `<=` reads ≤ and `Forall` reads ∀ until the cursor is on the line,
+where you get back what you typed. Anything the verifier has to say about them
+is violet too, as you type. A red line means the compiler will not take the
+program. A violet line means the program runs and has not been shown to keep
+its word.
+
+The best way to read this is to break things. Change a `<` to a `<=` in any
+block and see what the verifier says.
+
+```mermaid
+flowchart LR
+    req[Requires] --> body[the body, one path at a time]
+    inv[Invariant, Variant] --> body
+    body --> ens[Ensures at every return]
+    body --> safe[every index in range, every divisor not zero]
+    body --> calls[the Requires of every call]
+```
+
+## A contract
+
+`Requires` is what the caller owes. `Ensures` is what the function owes back.
+`Requires` goes above the function and `Ensures` directly under its closing
+brace, which is where a conclusion belongs. The result needs a name, so that
+the `Ensures` has something to call it.
+
+```go
+//@ Requires x > 0 ^ y > 0
+func AddPositives(x, y int) (sum int) {
+	return x + y
+}
+//@ Ensures sum > x ^ sum > y
+```
+
+Without the `Requires` this is false (try `0` and `0`), and the verifier says
+so: *Ensures is not proved for the return at line 50*.
+
+A function without annotations is not looked at. So a program can be proved a
+function at a time, and `main` below is left alone.
+
+One thing to know before your editor surprises you: gofmt rewrites `//@` in a
+doc comment as `// @`, and puts a blank line above an `Ensures`. litgo reads
+both spellings and looks upward past the blank line, so formatting on save
+changes how a contract looks and not what it means.
+
+## The language of formulas
+
+| | |
+|:--|:--|
+| `^`  `v`  `~` | and, or, not |
+| `->`  `<-`  `<->` | implies, is implied by, if and only if |
+| `=`  `<>`  `<`  `<=`  `>`  `>=` | comparisons. They chain: `0 <= i < n`. Go's `==` and `!=` are accepted too. |
+| `+`  `-`  `*`  `/`  `%` | integer arithmetic; `/` and `%` are Go's, which round towards zero |
+| `len(A)`, `A[i]` | the length and the elements of a slice of integers |
+| `s.Len` | an integer or boolean field of a struct |
+| `Forall k in [a, b) : P` | for every integer `k` with `a <= k < b` |
+| `Exists k in [a, b] : P` | for some `k` with `a <= k <= b` |
+| `Unique k in (a, b) : P` | for exactly one `k` with `a < k < b` |
+| `Z`, `[0, ...)` | all integers; an interval without an upper end |
+| `A[a:b) <= m` | every element of that range of `A` is at most `m` |
+| `m in A[a:b)`, `m = A[a:b)` | some element of the range is `m` |
+| `x'` | `x` after an assignment, where `x` is before it |
+
+The length of a slice is usually written the way mathematicians write it,
+`|A|`, and that is how the rest of this tutorial writes it. Go's own `&&`,
+`||` and `!` are accepted for *and*, *or* and *not*.
+
+A formula that is too long for a line goes on in the next `//@` comment, if
+its line ends in something that cannot end a formula: an operator, say.
+
+## Safety comes for free
+
+Some obligations are not written by anybody, because the code implies them.
+Every index has to be inside its slice, and every divisor has to be different
+from zero. This function needs its `Requires` for no other reason:
+
+```go
+//@ Requires 0 <= i ^ i < |A| ^ d <> 0
+func ElementOver(A []int, i, d int) (q int) {
+	return A[i] / d
+}
+//@ Ensures q * d + A[i] % d = A[i]
+```
+
+Take away `i < |A|` and the complaint is at the `A[i]` itself: *the index may
+be out of range*. Go stops evaluating `&&` and `||` early, and the verifier
+knows that, so `i < len(A) && A[i] > 0` is fine with nothing said about `i`.
+
+The `Ensures` shows that the prover knows what division means: a quotient and
+a remainder add up.
+
+```go
+//@ Requires n >= 0
+func Halve(n int) (h int) {
+	return n / 2
+}
+//@ Ensures 2*h <= n ^ n < 2*h + 2
+```
+
+## Loops
+
+Nobody knows how often a loop goes round, so the verifier does not try to
+follow it. It asks for an **invariant**: a formula that is true when the loop
+is reached and true again after every round. It proves those two things, and
+after the loop the invariant, together with the loop condition being false, is
+everything it knows.
+
+A **variant** is for termination: an integer expression that is not negative
+while the loop runs and that every round makes smaller. A loop without one is
+still proved correct *if* it ends, and gets a warning that says so.
+
+```go
+//@ Requires n >= 0 ^ d > 0
+func Divide(n, d int) (q, r int) {
+	r = n
+	//@ Invariant n = q*d + r ^ r >= 0
+	//@ Variant r
+	for r >= d {
+		q, r = q+1, r-d
+	}
+	return q, r
+}
+//@ Ensures n = q*d + r ^ 0 <= r < d
+```
+
+Read the invariant against the `Ensures`. They differ only in `r < d`, and
+that is exactly the loop condition being false. Finding an invariant is mostly
+this: take the postcondition and weaken it until it is true before the loop
+starts.
+
+`Requires d > 0` is there for the variant. With `d = 0` the loop would run
+forever, and the verifier notices: *Variant is not shown to decrease*.
+
+The two annotations may also stand at the end of the loop's body, which is
+where VeGo's own examples tend to put them.
+
+### Counted loops, `range`, `continue`
+
+The counter of a `for` loop is in scope for the invariant.
+
+```go
+//@ Requires n >= 0
+func SumTo(n int) (s int) {
+	//@ Invariant 0 <= i <= n + 1 ^ 2*s = i*(i-1)
+	//@ Variant n + 1 - i
+	for i := 0; i <= n; i++ {
+		s += i
+	}
+	return s
+}
+//@ Ensures 2*s = n*(n+1)
+```
+
+That is Gauss's formula, with the division multiplied away. Notice that
+nothing here is linear, and the proof goes through anyway, because
+`(i+1)*i` and `i*i + i` are the same polynomial.
+
+A `range` loop always ends, so it needs no variant. Its counter runs from `0`
+to the length, and the verifier knows that without being told. `continue`
+jumps to the end of the round, where the invariant is due as usual. The call
+of `fmt.Println` is let through because all it is handed are numbers and a
+string, so it cannot change anything the proof is about.
+
+```go
+func Count(A []int, x int) (n int) {
+	//@ Invariant 0 <= n <= i
+	for i, a := range A {
+		if a != x {
+			continue
+		}
+		n++
+		fmt.Println("  found", x, "at", i)
+	}
+	return n
+}
+//@ Ensures 0 <= n <= |A|
+```
+
+### `break`, and what cannot happen
+
+A `break` leaves the loop with whatever is known at that point. The invariant
+is not assumed there, since the round was not finished.
+
+`Exsures` is the negative of `Ensures`. It describes a state that no return
+may be in, which is sometimes the more natural thing to say: *it never
+happens that a position is returned and the element there is not `x`*.
+
+```go
+func Find(A []int, x int) (at int) {
+	at = -1
+	//@ Invariant 0 <= i <= |A| ^ at = -1
+	//@ Invariant x <> A[0:i)
+	//@ Variant |A| - i
+	for i := 0; i < len(A); i++ {
+		if A[i] == x {
+			at = i
+			break
+		}
+	}
+	return at
+}
+//@ Ensures at = -1 v 0 <= at < |A|
+//@ Ensures at = -1 -> Forall k in [0, |A|) : A[k] <> x
+//@ Exsures at >= 0 ^ A[at] <> x
+```
+
+## Quantifiers, ranges and predicates
+
+`x <> A[0:i)` in the last example was a quantifier in disguise: *`x` differs
+from every element of `A` from `0` up to but not including `i`*. The ends of a
+range are written like the ends of an interval, `[` or `]` for an end that is
+included and `(` or `)` for one that is not. An order comparison with a range
+holds for all of its elements; `=` and `in` hold for some element.
+
+```go
+//@ Requires |A| > 0
+func Max(A []int) (m int) {
+	m = A[0]
+	//@ Invariant 1 <= i <= |A|
+	//@ Invariant A[0:i) <= m ^ m in A[0:i)
+	//@ Variant |A| - i
+	for i := 1; i < len(A); i++ {
+		if A[i] > m {
+			m = A[i]
+		}
+	}
+	return m
+}
+//@ Ensures A[:] <= m ^ m in A[:]
+```
+
+Both halves of that `Ensures` matter. `A[:] <= m` by itself is satisfied by
+returning a billion. A contract that is too weak is proved just as happily as
+a good one, and it is the reader who has to notice.
+
+A `Predicate` gives a formula a name. It is not a function and is never run;
+using it means its body. This one also shows a formula going on in the next
+line, after the `:`.
+
+```go
+//@ Predicate Sorted(A) ::= Forall i in [0, |A|) :
+//@   Forall j in [i, |A|) : A[i] <= A[j]
+
+//@ Predicate Between(lo, x, hi) ::= lo <= x ^ x <= hi
+```
+
+## Calls
+
+A call is where verification is modular. The caller never looks inside the
+callee: it proves the callee's `Requires`, and what it learns about the result
+is the callee's `Ensures`, and nothing else.
+
+```go
+//@ Requires Between(0, x, 10)
+func Twice(x int) (r int) {
+	return x + x
+}
+//@ Ensures r = double(x) ^ Between(0, r, 20)
+
+//@ Requires Between(1, k, 5)
+func UseTwice(k int) (r int) {
+	return Twice(k) + Twice(k+5)
+}
+//@ Ensures r = 4*k + 10
+```
+
+Make that `Between(1, k, 6)` and the second call is refused: *this call does
+not establish what Twice requires*.
+
+`double` in that `Ensures` is a Go function. A function whose whole body is
+`return` and one expression can be used in a formula, where it means that
+expression. It is a way to give the contract a vocabulary that the program
+shares.
+
+```go
+func double(x int) int { return 2 * x }
+```
+
+## Recursion
+
+Recursion is induction. Inside `Triangle`, the call `Triangle(n-1)` is known
+by the contract being proved: that is the induction hypothesis, and using it is
+sound as long as the induction is well-founded. `Measure` is what makes it so:
+an expression that is not negative and is smaller at every recursive call.
+`BaseCase` marks where the induction starts, and the verifier checks that no
+recursive call can be reached once it has held. `InductionHypothesis` states,
+and proves, what makes the recursive call legal.
+
+```go
+//@ Requires n >= 0
+//@ Measure n
+func Triangle(n int) (t int) {
+	//@ BaseCase n = 0
+	if n == 0 {
+		return 0
+	}
+	//@ InductionHypothesis n - 1 >= 0
+	return n + Triangle(n-1)
+}
+//@ Ensures 2*t = n*(n+1)
+```
+
+Write `Triangle(n)` instead and the contract would still "follow" from itself.
+The `Measure` is what catches it: *Measure is not shown to get smaller in the
+recursive call*.
+
+## Assertions and primes
+
+`Assert` is a claim about the state at one point. It is proved there, and
+known from there on, so it doubles as a stepping stone when the prover needs
+to be led. The word is optional: a bare formula is an assertion.
+
+A primed name is a value *after* an assignment. In a formula that mentions
+`x'`, the `x'` is the value now and the plain `x` is the value one assignment
+earlier, and with `x''` everything moves one further back. This is the old
+trick of swapping two numbers without a third:
+
+```go
+func Swap(a, b int) (x, y int) {
+	x, y = a, b
+	x = x + y
+	y = x - y
+	x = x - y
+	//@ Assert x = a + b ^ x' = b
+	//@ y = a
+	return x, y
+}
+//@ Ensures x = b ^ y = a
+```
+
+In an `Ensures`, a parameter without a prime is the value the caller passed,
+whatever the body has done to its copy since.
+
+## Promises that last: `Preserves`
+
+`Preserves` states something once and has it checked after every assignment
+until the block ends. A loop inside that block may assume it, so it does not
+have to be repeated in the invariant.
+
+```go
+//@ Requires amount >= 0
+func Transfer(from, to, amount int) (f, t int) {
+	f, t = from, to
+	//@ Preserves f + t = from + to
+	//@ Invariant 0 <= moved <= amount ^ f = from - moved
+	//@ Variant amount - moved
+	for moved := 0; moved < amount; moved++ {
+		f, t = f-1, t+1
+	}
+	return f, t
+}
+//@ Ensures f + t = from + to ^ f = from - amount
+```
+
+No money is created or destroyed. The parallel assignment is the point: `f--`
+followed by `t++` would break the promise for the length of one statement, and
+the verifier would say which one.
+
+## The escape hatch: `Axiom`
+
+The prover is complete for nothing. Its arithmetic is linear, with products
+treated as unknowns about which it knows a few facts, and the cube of a
+number is past what it knows. `Axiom` tells it, and it believes you without
+proof. That is exactly as dangerous as it sounds, so every `Axiom` is reported
+as a warning, every time.
+
+```go
+//@ Requires x >= 0
+func Cube(x int) (c int) {
+	//@ Axiom x*x*x >= 0
+	return x * x * x
+}
+//@ Ensures c >= 0
+```
+
+## All of it at once: binary search
+
+The most famous loop with a bug in it. The invariant says that everything to
+the left of `lo` is too small and everything from `hi` on is too big, and
+`Sorted` is what lets one comparison with `A[mid]` speak for a whole half of
+the slice.
+
+```go
+//@ Requires Sorted(A)
+func Search(A []int, x int) (at int, found bool) {
+	lo, hi := 0, len(A)
+	//@ Invariant 0 <= lo <= hi <= |A|
+	//@ Invariant A[0:lo) < x ^ x < A[hi:|A|)
+	//@ Variant hi - lo
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		if A[mid] == x {
+			return mid, true
+		} else if A[mid] < x {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	return 0, false
+}
+//@ Ensures found -> 0 <= at < |A| ^ A[at] = x
+//@ Ensures ~found -> x <> A[:]
+```
+
+Four things are proved here, and only two of them were written down: if
+`found`, then `at` is a position of `x`; if not, `x` is nowhere in `A`; and,
+unasked, `A[mid]` is always inside the slice, and the loop ends. Try
+`lo = mid` (it loops forever, and the `Variant` says so), `hi = mid - 1` (it
+skips an element, and the invariant is not maintained), or drop the
+`Requires` (and nothing about the halves follows).
+
+## What is left out
+
+litgo's checker is its own, because the paper's `vegop` has not been
+published, and it is deliberately smaller than what the paper describes.
+
+* **The fragment.** Integers, booleans, slices of integers that are read and
+  not written, integer and boolean fields of structs, `if`, `for`, `range`,
+  `break`, `continue`, `return`, and calls of annotated functions. An
+  annotated function that uses anything else is reported as *not verified*,
+  with the line that was too much. It is never silently passed.
+* **No writes through a slice or a pointer.** `A[i] = x` may change another
+  slice that shares the array, and a proof that did not notice would prove
+  something false. So sorting is out, for now.
+* **Not Go, so not here.** VeGo's `.vgo` dialect has `while`, `skip` and
+  functions inside functions. A litgo block is Go, where `for cond {}`, an
+  empty statement and a second function say the same.
+* **Read but not checked.** `Property`, and contracts on interface methods.
+  They get a warning rather than silence.
+* **The integers are mathematical.** Overflow is not modelled, here or in the
+  paper.
+* **"Not proved" is not "false".** The prover never calls a false thing
+  proved, and it sometimes fails to prove a true one. The cure is usually a
+  stronger invariant or an `Assert` on the way.
+
+## Running it
+
+```go
+func main() {
+	fmt.Println("AddPositives(2, 3) =", AddPositives(2, 3))
+	fmt.Println("ElementOver({7, 9}, 1, 2) =", ElementOver([]int{7, 9}, 1, 2))
+	fmt.Println("Halve(7) =", Halve(7))
+	q, r := Divide(17, 5)
+	fmt.Println("Divide(17, 5) =", q, r)
+	fmt.Println("SumTo(100) =", SumTo(100))
+	A := []int{1, 3, 3, 7, 9, 12}
+	fmt.Println("Count(A, 3):")
+	fmt.Println("  =", Count(A, 3))
+	fmt.Println("Find(A, 7) =", Find(A, 7))
+	fmt.Println("Max(A) =", Max(A))
+	fmt.Println("UseTwice(2) =", UseTwice(2))
+	fmt.Println("Triangle(10) =", Triangle(10))
+	x, y := Swap(1, 2)
+	fmt.Println("Swap(1, 2) =", x, y)
+	f, t := Transfer(10, 0, 4)
+	fmt.Println("Transfer(10, 0, 4) =", f, t)
+	fmt.Println("Cube(3) =", Cube(3))
+	at, found := Search(A, 9)
+	fmt.Println("Search(A, 9) =", at, found)
+}
+```
+````
+
+# An example with a tree in it
+
+The fourth proves things about data structures: a binary heap, which is a tree
+kept in a slice, and a ring buffer. The numbering of the heap really is a
+tree, the heap property really does put the maximum at the root, and the
+operations of the ring really do keep its invariant.
+
+<!-- file: examples/heap.lit.md -->
+<!-- verbatim -->
+````markdown
+<!-- tangler: go -->
+<!-- package: main -->
+<!-- imports: fmt -->
+
+# A tree in an array, and a queue in a circle
+
+Two data structures that are nothing but integers and a slice, which is what
+makes them good first subjects for a proof: a binary heap, which is a tree
+with no pointers in it, and a ring buffer, which is a queue with no end.
+
+Everything here is proved by `litgo prove`, in the notation of
+[VeGo](https://arxiv.org/abs/2608.22630). What "proved" means for a data
+structure comes in three kinds, and each shows up below:
+
+* **The shape is right.** The arithmetic that finds a parent or a child really
+  does describe a tree: children know their parent, nobody is their own
+  ancestor, no index falls off the slice.
+* **The invariant means something.** From "every node is at most its parent",
+  which is a local fact, it follows that the root is the maximum, which is a
+  global one. That step is an induction, and a loop is how an induction is
+  written.
+* **The operations keep the invariant.** Whatever state a ring buffer is in,
+  if it was a valid one before `Push`, it is a valid one after.
+
+```mermaid
+flowchart TD
+    n0["A[0] = 9"] --> n1["A[1] = 7"] & n2["A[2] = 8"]
+    n1 --> n3["A[3] = 3"] & n4["A[4] = 5"]
+    n2 --> n5["A[5] = 6"]
+```
+
+## The shape of the tree
+
+The tree is in the numbering. Node $i$ has its children at $2i+1$ and $2i+2$,
+and so its parent at $\lfloor (i-1)/2 \rfloor$. Three one-line functions, and
+their contracts say that they fit together.
+
+```go
+//@ Requires i >= 0
+func Left(i int) (c int) { return 2*i + 1 }
+//@ Ensures Parent(c) = i ^ c > i
+
+//@ Requires i >= 0
+func Right(i int) (c int) { return 2*i + 2 }
+//@ Ensures Parent(c) = i ^ c = Left(i) + 1
+
+//@ Requires i > 0
+func Parent(i int) (p int) { return (i - 1) / 2 }
+//@ Ensures 0 <= p < i
+//@ Ensures i = Left(p) v i = Right(p)
+```
+
+`Parent(Left(i)) = i` needs the verifier to know that $2i/2 = i$ and that
+$(2i+1)/2 = i$ too, which is what rounding down means. A function that is one
+`return` of one expression can be used inside a formula, where it stands for
+that expression, so the contracts can talk about each other.
+
+`0 <= p < i` is the important one. It says a parent's number is smaller than
+its child's. So walking upwards always makes progress, there are no cycles,
+and every walk ends at node 0. That is what makes this numbering a *tree*.
+
+## The heap property
+
+A max-heap is a tree in which no node is larger than its parent. As a
+predicate over the whole slice:
+
+```go
+//@ Predicate Heap(A) ::= Forall k in [1, |A|) : A[Parent(k)] >= A[k]
+```
+
+Checking it is a loop over the nodes that have a parent. The contract is an
+*if and only if*: `true` means it is a heap, and `false` means it is not, which
+is the half people forget to promise.
+
+```go
+func IsHeap(A []int) (ok bool) {
+	//@ Invariant 1 <= i
+	//@ Invariant Forall k in [1, i) : k < |A| -> A[Parent(k)] >= A[k]
+	//@ Variant |A| - i
+	for i := 1; i < len(A); i++ {
+		if A[Parent(i)] < A[i] {
+			return false
+		}
+	}
+	return true
+}
+//@ Ensures ok <-> Heap(A)
+```
+
+Nobody wrote that `A[Parent(i)]` is inside the slice. The verifier works it
+out from `1 <= i < len(A)` and the meaning of division, or refuses the
+function.
+
+## From local to global: the root is the maximum
+
+The heap property only compares a node with its parent. That the root beats
+*every* node follows by climbing: if $A[j] \ge A[i]$ and $j$ is not the root,
+then $A[\mathrm{Parent}(j)] \ge A[j] \ge A[i]$, and the parent is closer to
+the root.
+
+```go
+//@ Requires Heap(A) ^ 0 <= i < |A|
+func Depth(A []int, i int) (d int) {
+	j := i
+	//@ Invariant 0 <= j <= i ^ A[j] >= A[i] ^ d >= 0
+	//@ Variant j
+	for j > 0 {
+		j = Parent(j)
+		d++
+	}
+	return d
+}
+//@ Ensures d >= 0 ^ A[0] >= A[i]
+```
+
+The function counts how deep node `i` is. Its proof is the interesting part:
+the invariant carries `A[j] >= A[i]` up the tree, and when the loop ends `j`
+is 0. The `Variant` is `j` itself, which shrinks because `Parent(j) < j`. So
+the same contract proves that the climb is correct and that it ends.
+
+That was one node. For all of them at once, the induction goes over the
+numbering instead of up a path: if the root beats every node below `k`, it
+beats `Parent(k)`, which beats `k`.
+
+```go
+//@ Requires Heap(A) ^ |A| > 0
+func Max(A []int) (m int) {
+	//@ Invariant 1 <= k <= |A| ^ A[0:k) <= A[0]
+	//@ Variant |A| - k
+	for k := 1; k < len(A); k++ {
+		//@ Assert A[Parent(k)] <= A[0]
+	}
+	return A[0]
+}
+//@ Ensures A[:] <= m ^ m in A[:]
+```
+
+This loop does nothing. (The `Assert` is the step of the induction, written
+out for the reader. The prover finds it without being told.) The loop is there
+because it is the proof: VeGo has no ghost
+code, so an induction has to be a loop that could run, and this one runs. It
+costs a pass over the slice to return `A[0]`, which a real heap would not pay,
+and the honest way to use it is as a lemma, once, in a test. It is worth
+seeing anyway, because it shows what a loop invariant *is*: the induction
+hypothesis, with the loop as the induction.
+
+## One step of sifting down
+
+Repairing a heap means swapping a node with its larger child. Choosing that
+child is where the off-by-one errors live, because a node can have two
+children, one, or none.
+
+```go
+//@ Requires i >= 0 ^ Left(i) < |A|
+func LargerChild(A []int, i int) (c int) {
+	c = Left(i)
+	if Right(i) < len(A) && A[Right(i)] > A[c] {
+		c = Right(i)
+	}
+	return c
+}
+//@ Ensures (c = Left(i) v c = Right(i)) ^ c < |A| ^ Parent(c) = i
+//@ Ensures A[c] >= A[Left(i)] ^ (Right(i) < |A| -> A[c] >= A[Right(i)])
+```
+
+Go stops evaluating `&&` at the first `false`, and the verifier knows it, so
+`A[Right(i)]` is only obliged to be in range when `Right(i) < len(A)` has just
+been checked. Swap the two halves of that condition and the proof fails at the
+index.
+
+The swap itself is `A[i], A[c] = A[c], A[i]`, and that is where this verifier
+stops: it does not follow writes into a slice, because another slice may share
+the array. So `main` below does the swapping, unproved, with the proved
+function telling it where.
+
+## A queue in a circle
+
+A ring buffer is three integers and a slice: where the oldest element is, how
+many there are, and how much room. Its invariant is what makes those three
+numbers a queue.
+
+```go
+//@ Predicate Ring(head, size, room) ::= room > 0 ^ 0 <= head < room ^ 0 <= size <= room
+```
+
+Every operation has the same contract in outline: *given a valid ring, here is
+a slot inside the buffer, and a valid ring again*. The parameters cannot
+change, being integers passed by value, so the new state comes back as
+results.
+
+```go
+//@ Requires Ring(head, size, room) ^ size < room
+func Push(head, size, room int) (slot, h, s int) {
+	return (head + size) % room, head, size + 1
+}
+//@ Ensures 0 <= slot < room ^ Ring(h, s, room) ^ s = size + 1
+
+//@ Requires Ring(head, size, room) ^ size > 0
+func Pop(head, size, room int) (slot, h, s int) {
+	return head, (head + 1) % room, size - 1
+}
+//@ Ensures 0 <= slot < room ^ Ring(h, s, room) ^ s = size - 1
+```
+
+`size < room` and `size > 0` are the two ways to misuse a queue, and they are
+now the caller's problem, in writing. A caller that is itself verified has to
+prove them:
+
+```go
+//@ Requires Ring(head, size, room) ^ size < room
+func PushThenPop(head, size, room int) (h, s int) {
+	_, h, s = Push(head, size, room)
+	_, h, s = Pop(h, s, room)
+	return h, s
+}
+//@ Ensures Ring(h, s, room) ^ s = size
+```
+
+`Pop` is legal there because `Push` promised `s = size + 1`, which is more
+than zero. Take that out of `Push`'s contract and this function stops
+verifying, though `Push` itself still does: a contract is everything a caller
+gets to know.
+
+## Running it
+
+```go
+func main() {
+	A := []int{9, 7, 8, 3, 5, 6}
+	fmt.Println("IsHeap:", IsHeap(A), " Max:", Max(A), " Depth of node 5:", Depth(A, 5))
+
+	// Replace the root and sift it down, one proved step at a time.
+	A[0] = 1
+	for i := 0; Left(i) < len(A); {
+		c := LargerChild(A, i)
+		if A[i] >= A[c] {
+			break
+		}
+		A[i], A[c] = A[c], A[i]
+		i = c
+	}
+	fmt.Println("after sifting 1 down:", A, " IsHeap:", IsHeap(A))
+
+	buf := make([]int, 3)
+	head, size := 0, 0
+	for _, x := range []int{10, 20, 30} {
+		var slot int
+		slot, head, size = Push(head, size, len(buf))
+		buf[slot] = x
+	}
+	var slot int
+	slot, head, size = Pop(head, size, len(buf))
+	fmt.Println("popped", buf[slot])
+	slot, head, size = Push(head, size, len(buf))
+	buf[slot] = 40
+	fmt.Println("buffer:", buf, " head:", head, " size:", size)
+}
+```
+
+## Things to break
+
+* In `Parent`, return `i / 2`. `Left` still verifies. `Right` does not, nor
+  does `Parent` itself, nor `LargerChild`: the tree has lost its right
+  children, and everything that relied on them says so.
+* In `Depth`, climb with `j = j - 1`. It still ends, and the invariant is not
+  maintained, because the node before `j` is no relation of it.
+* In `LargerChild`, test `A[Right(i)] > A[c]` first. The index is no longer
+  known to be in range.
+* In `Push`, drop the `% room`. The slot escapes the buffer.
+````
+
 # Publishing
 
 The last two files aren't part of litgo. They are what GitHub does with it
@@ -11280,7 +17470,8 @@ the binaries.
 This document is also the project's web page. Every push to `master` builds
 litgo from the committed sources, weaves this file to HTML with the binary it
 just built, and publishes the result to GitHub Pages. The tests run first, so a
-push that breaks litgo doesn't replace a page that works. The HTML needs only
+push that breaks litgo doesn't replace a page that works, and so do the proofs,
+of this document and of the examples. The HTML needs only
 pandoc, because the browser runs mermaid.js and KaTeX for itself. pandoc is
 pinned to a release, since what Ubuntu packages is years older and the page
 should look the way it does when woven at home.
@@ -11317,11 +17508,12 @@ jobs:
         run: |
           curl -fsSL -o pandoc.deb "https://github.com/jgm/pandoc/releases/download/$PANDOC/pandoc-$PANDOC-1-amd64.deb"
           sudo dpkg -i pandoc.deb
-      - name: Build and test
+      - name: Build, test and prove
         run: |
           go vet ./...
           go test ./...
           go build -o bin/litgo .
+          bin/litgo prove litgo.lit.md examples/isqrt.lit.md examples/vego-tutorial.lit.md examples/heap.lit.md
       - name: Weave
         run: |
           mkdir _site
