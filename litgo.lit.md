@@ -2,28 +2,29 @@
 
 # litgo: literate Go
 
-litgo is a literate programming tool for Go, and this document is litgo's own
-source. Every source file in the repository (the Go module, its tests, the
-Neovim plugin) gets tangled out of the Markdown you are reading. The only file
-written by hand is the README.
+You are reading a program. Not the documentation for a program, not a tour of
+one, the program itself. Every source file in this repository (the Go module,
+its tests, the Neovim plugin) is tangled out of the Markdown in front of you.
+The only file written by hand is the README.
 
-In a literate program the code is written for a human reader first. You put the
-code in whatever order explains it best, in pieces small enough to talk about
-one at a time, and a tool puts the pieces back in the order the compiler wants.
-litgo does four things with a document like that:
+Donald Knuth called this [literate programming](https://en.wikipedia.org/wiki/Literate_programming)
+back in 1984. The code is written for a human first. You put it in whatever
+order explains it best, in pieces small enough to talk about one at a time, and
+a tool puts the pieces back in the order the compiler wants. litgo does four
+things with a document like that:
 
 * **tangle** it into source files,
 * **weave** it into a PDF or a web page for reading, with typeset math and
   drawn diagrams,
-* **prove** it, where the code says what it promises. A literate program is an
-  argument that the code is right, written for a person. The `//@` annotations
-  of [VeGo](https://arxiv.org/abs/2608.22630) are the same argument written
-  for a machine: a contract on a function, an invariant on a loop. litgo checks
-  them, so the part of the prose that says "this loop keeps `lo*lo <= n`" stops
-  being something the reader has to take on trust,
-* **run** it, and translate every compiler error, vet warning, failed proof,
-  test failure and panic back to a line and column in the Markdown, so you
-  never have to leave the document to see what went wrong.
+* **prove** it, wherever the code makes a promise. A literate program is an
+  argument, written for a person, that the code is right. The `//@`
+  annotations of [VeGo](https://arxiv.org/abs/2608.22630) are the same
+  argument written for a machine: a contract on a function, an invariant on a
+  loop. litgo checks them, so when the prose says "this loop keeps
+  `lo*lo <= n`", the reader no longer has to take my word for it,
+* **run** it, and chase every compiler error, vet warning, failed proof, test
+  failure and panic back to a line and column in the Markdown. You never have
+  to leave the document to find out what went wrong.
 
 ```mermaid
 flowchart LR
@@ -34,32 +35,34 @@ flowchart LR
     bin -->|run| doc
 ```
 
-litgo is developed using the loop at the bottom of that picture. The generated
-sources are committed to the repository, so a fresh clone builds with nothing
-but Go, and after that litgo rebuilds itself:
+Look at the bottom of that picture. The last arrow points from the binary back
+into the document. That loop is how litgo gets built. The generated sources are
+committed, so a fresh clone builds with nothing but Go, and from then on litgo
+rebuilds itself:
 
 ```sh
 go build -o bin/litgo .        # stage 1, from the committed sources
 bin/litgo run litgo.lit.md     # tangle, prove, vet, test, rebuild bin/litgo
 ```
 
-litgo takes its own medicine in a small way. The arithmetic that translates a
-column between the Markdown and the tangled file is what every editor feature
-in this document depends on, and it is proved, by the verifier in this
-document, every time the line above is run. [Two halves of one
-map](#two-halves-of-one-map) says what is proved and, just as carefully, what
-is only tested.
+litgo also takes its own medicine. Every editor feature in this document rests
+on one small piece of arithmetic, the one that moves a column between the
+Markdown and the tangled file. If that arithmetic is wrong, everything is
+wrong, quietly. So it is proved, by the verifier in this document, every time
+the line above runs. [Two halves of one map](#two-halves-of-one-map) says what
+is proved and, just as carefully, what is only tested.
 
-`litgo run` does what the `run:` directive on the first line of this document
-says. (It names the packages rather than saying `./...`, because running two of
-the examples leaves two `main` functions in `examples/`, which is fine for
-them and not for `go vet`.) If you tangle this document with the binary it produces, you get back
-exactly the sources that binary was built from. That fixed point is how we know
-the bootstrap works.
+`litgo run` does whatever the `run:` directive on the first line says. (It
+names the packages instead of saying `./...`, because running two of the
+examples leaves two `main` functions in `examples/`, which is fine for them and
+not for `go vet`.) Now the fun part. Tangle this document with the binary it
+produces, and you get back exactly the sources that binary was built from. The
+snake eats its own tail and comes out the same length. That fixed point is how
+we know the bootstrap works.
 
 <!-- file: go.mod -->
 
-litgo only depends on the standard library.
+litgo depends on nothing but the standard library.
 
 ```gomod
 module github.com/tlehman/litgo
@@ -79,10 +82,9 @@ go 1.24
 
 ## The format
 
-A `.lit.md` file is ordinary Markdown. Everything litgo needs goes in HTML
-comments, which a Markdown renderer hides, and in code comments, which keep the
-code valid for syntax highlighters and formatters. Here is a small complete
-program:
+A `.lit.md` file is plain Markdown. Everything litgo needs hides in two places:
+HTML comments, which Markdown renderers don't show, and code comments, which
+keep the code valid for highlighters and formatters. Here's a complete program:
 
 ````markdown
 <!-- package: main -->
@@ -109,21 +111,21 @@ fmt.Println("hello,", /*<<whom>>*/)
 ```
 ````
 
-Unnamed code blocks in the file's language get written out in the same order
-they appear in the `.lit.md` document, and named blocks only show up where they
-are referenced. You name a block by putting a `chunk:` directive above it. You
-reference it with a comment that contains nothing but the chunk's name in
-double angle brackets. A line comment on a line by itself splices the chunk in
-at that indentation, and a block comment splices it into the middle of a line.
+Unnamed blocks in the file's language get written out in the order they appear.
+Named blocks only show up where something references them. You name a block
+with a `chunk:` directive above it, and you reference it with a comment that
+holds nothing but the name in double angle brackets. A line comment on a line of
+its own splices the chunk in at that indentation. A block comment splices it
+into the middle of a line.
 
-Splicing is plain text substitution, on purpose. A chunk is not a function, so
-it can see every name that is in scope at the place where it lands. Idiomatic
-Go has a lot of big statements (a `for` around a `select` around an `if`, with
-a `defer` on top), and you can't turn their parts into functions without
-passing half the local variables around. With a chunk you can move one part
-somewhere else and explain it there, and the program stays exactly the same.
+Splicing is plain text substitution, on purpose. A chunk is not a function. It
+sees every name that is in scope wherever it lands. Idiomatic Go is full of big
+statements (a `for` around a `select` around an `if`, with a `defer` on top),
+and you can't carve those into functions without passing half the local
+variables around. A chunk lets you lift one part out, explain it somewhere
+else, and leave the program exactly as it was.
 
-These are the directives:
+Here are the directives:
 
 | Directive | Meaning |
 |---|---|
@@ -131,23 +133,23 @@ These are the directives:
 | `package: name` | Gives the current file a package clause. |
 | `imports: a, b, alias c` | Gives the current file an import block. |
 | `chunk: name` | Names the next block. Blocks with the same name get concatenated. |
-| `notangle` | The next block is only an illustration and is left out of the program. |
-| `verbatim` | In the next block, text that looks like a reference is treated as plain text. |
+| `notangle` | The next block is only an illustration and stays out of the program. |
+| `verbatim` | In the next block, text that looks like a reference is just text. |
 | `tangler-exclude: regexp` | Drops the source lines that match. |
 | `tangler: lang`, `output: path` | Set the language and path of the default file. The defaults are `go` and `name.go` for `name.lit.md`. |
-| `run: command` | The command `litgo run` runs after tangling. Without it, `litgo run` builds and runs the default file. |
+| `run: command` | What `litgo run` runs after tangling. Without it, `litgo run` builds and runs the default file. |
 
-litgo never reformats the code it tangles. Each output line comes from one
-source line, so any position in the output can be traced back exactly.
+litgo never reformats the code it tangles. Every output line comes from exactly
+one source line, so any position in the output can be traced back home.
 
-Specifications need no directive at all, because they are part of the code: a
-comment that starts with `//@` is a VeGo annotation, and goes wherever the Go
-it describes goes, through any number of chunks. A function's contract can sit
-in the block that introduces the function while the invariant sits three
-sections later, in the chunk with the loop, next to the paragraph that explains
-it. The verifier sees them joined up, the way the compiler sees the code.
+Specifications need no directive at all, because they're part of the code. A
+comment that starts with `//@` is a VeGo annotation, and it travels wherever the
+Go it describes travels, through any number of chunks. A function's contract can
+sit in the block that introduces the function while its loop invariant sits
+three sections later, right next to the paragraph that explains the loop. The
+verifier sees them joined up, the same way the compiler sees the code.
 [Proofs](#proofs) is the chapter about them, and
-[A tutorial in proofs](#a-tutorial-in-proofs) the tour.
+[A tutorial in proofs](#a-tutorial-in-proofs) is the guided tour.
 
 # The document model
 
@@ -155,15 +157,15 @@ it. The verifier sees them joined up, the way the compiler sees the code.
 <!-- package: lit -->
 <!-- imports: fmt, path/filepath, regexp, strings -->
 
-Package `lit` implements the format. It parses documents, tangles them while
-keeping a source map, and computes the structural edits that an editor asks
-for. All line and column numbers in this package are 0-based, and columns count
-bytes. That matches what the Go compiler and Neovim use, once you subtract one
-from theirs.
+Package `lit` is the format itself. It parses documents, tangles them while
+keeping a source map, and works out the structural edits an editor asks for.
+Every line and column in this package is 0-based, and columns count bytes.
+That's what the Go compiler and Neovim use too, once you subtract one from
+theirs.
 
-Problems can come from the document's structure, the Go parser, the compiler,
-or the running program. Wherever a problem comes from, it ends up as a `Diag`
-that points into the `.lit.md` file. The severity values are the same ones
+A problem can come from the document's structure, the Go parser, the compiler,
+or the running program. It doesn't matter where. Every problem ends up as a
+`Diag` pointing into the `.lit.md` file. The severity values are the ones
 `vim.diagnostic` uses.
 
 ```go
@@ -186,10 +188,9 @@ type Diag struct {
 }
 ```
 
-A directive is an HTML comment on a line by itself. litgo keeps the column
-where the directive's value starts, because errors can point into directives
-too. For example, an unused import gets reported on its entry in the `imports:`
-line.
+A directive is an HTML comment on a line by itself. litgo remembers the column
+where its value starts, because errors can point into directives too. An unused
+import, for example, gets reported right on its entry in the `imports:` line.
 
 ```go
 // Directive is a `<!-- key: value -->` line outside of any code fence.
@@ -210,8 +211,8 @@ type Import struct {
 }
 ```
 
-A document writes one or more files. There is always a default file named after
-the document, and every `file:` directive starts another one. `package:` and
+A document writes one or more files. There's always a default file named after
+the document, and every `file:` directive starts another. `package:` and
 `imports:` apply to whichever file is current.
 
 ```go
@@ -227,8 +228,8 @@ type File struct {
 }
 ```
 
-A block remembers which file was current when it appeared, its chunk name if it
-has one, and which lines its fences are on. If a fence is indented inside a
+A block remembers which file was current when it showed up, its chunk name if
+it has one, and which lines its fences sit on. If a fence is indented inside a
 list, that indentation gets stripped from the block's content.
 
 ```go
@@ -267,12 +268,12 @@ type Doc struct {
 
 The Markdown side needs two regular expressions. The directive pattern is
 anchored at both ends and matches its value lazily, so the value can contain
-`-->` itself. An exclude pattern for HTML comments needs that.
+`-->` itself. (An exclude pattern for HTML comments needs exactly that.)
 
-The reference patterns accept the comment syntax of three language families:
+The reference patterns speak the comment syntax of three language families:
 C-like (`//`, `/* */`), Lua and SQL (`--`, `--[[ ]]`) and the shell family
-(`#`). The patterns capture the comment opener, so that renaming a chunk can
-put the same opener back.
+(`#`). They capture the comment opener, so renaming a chunk can put the same
+opener back.
 
 ```go
 var (
@@ -293,9 +294,9 @@ var knownDirectives = map[string]bool{
 }
 ```
 
-A file's extension decides its language, and the fences of its blocks have to
-say that language. This table covers the extensions that don't match the
-language name.
+A file's extension picks its language, and the fences of its blocks have to
+name that language. Most extensions already are the language name. This table
+covers the ones that aren't.
 
 ```go
 // languages maps a file extension to the fence language of the blocks that
@@ -317,8 +318,8 @@ func langOf(path string) string {
 }
 ```
 
-litgo writes comments as well as reading them. It writes a marker at the top of
-each generated file, and `:Untangle` writes a reference where the code used to
+litgo writes comments as well as reading them. It stamps a marker at the top of
+each generated file, and `:Untangle` leaves a reference where the code used to
 be.
 
 ```go
@@ -348,9 +349,9 @@ func NormName(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 ## Parsing
 
-Parsing is one pass over the lines. `Parse` never fails, because a document
-that is being edited is usually broken somewhere, and the editor still wants
-results for the rest of it.
+Parsing is one pass over the lines, and `Parse` never fails. Who cares? The
+editor does. A document you are editing is broken somewhere almost all the
+time, and the editor still wants answers about the rest of it.
 
 ```go
 // Parse reads a .lit.md document. Errors land in Diags.
@@ -389,11 +390,10 @@ func Parse(path string, src []byte) *Doc {
 }
 ```
 
-A fence closes at the next line that is made of the same fence character and is
-at least as long. That is how a four-backtick block can hold three-backtick
-fences, and how this document can hold its own example. Any `chunk:`,
-`notangle` or `verbatim` directives that were waiting get attached to this
-block.
+A fence closes at the next line made of the same fence character, at least as
+long. That's how a four-backtick block can hold three-backtick fences, and how
+this document can hold its own example. Any `chunk:`, `notangle` or `verbatim`
+directives that were waiting get attached to this block.
 
 <!-- chunk: record a code block and skip past it -->
 ```go
@@ -420,8 +420,8 @@ d.Blocks = append(d.Blocks, b)
 i = b.Close
 ```
 
-Directives that attach to the next block are held until that block shows up.
-`file:` changes the current file. The rest configure the document or the
+Directives that belong to the next block wait until that block shows up.
+`file:` switches the current file. The rest configure the document or the
 current file.
 
 <!-- chunk: record a directive -->
@@ -455,9 +455,9 @@ default:
 }
 ```
 
-Blank lines are allowed between a directive and its block, but prose is not. A
-`chunk:` directive followed by a paragraph names nothing, and litgo warns about
-it instead of silently naming some later block.
+Blank lines are allowed between a directive and its block. Prose is not. A
+`chunk:` directive followed by a paragraph names nothing, and litgo warns you
+instead of quietly naming some block further down.
 
 <!-- chunk: prose cancels directives that were waiting for a block -->
 ```go
@@ -518,8 +518,8 @@ func (d *Doc) apply(dir *Directive, cur *File) {
 
 ## Files, blocks and chunks
 
-OutPath is where a file is written. The default file is named after 
-the document: name.lit.md tangles to name.go.
+`OutPath` is where a file gets written. The default file is named after the
+document: `name.lit.md` tangles to `name.go`.
 
 ```go
 func (d *Doc) OutPath(f *File) string {
@@ -541,9 +541,9 @@ func (d *Doc) OutPath(f *File) string {
 }
 ```
 
-There are two ways a block can take part in tangling. It either gets written
-straight into its file, or it is a chunk. A chunk can be in any language,
-because where it ends up depends on who references it.
+A block can take part in tangling in two ways. Either it's written straight
+into its file, or it's a chunk. A chunk can be in any language, because where
+it lands depends on who references it.
 
 ```go
 // IsRoot reports whether the block is written straight into its file: it is
@@ -609,8 +609,8 @@ func (d *Doc) refs(b *Block, line int) []Ref {
 }
 ```
 
-`Chunks` is the index that everything else uses: tangling, the checks for
-unused and undefined chunks, renaming, and navigation in the editor.
+`Chunks` is the index everything else leans on: tangling, the checks for unused
+and undefined chunks, renaming, and navigation in the editor.
 
 ```go
 // Chunk gathers every block sharing a name, plus all references to it.
@@ -662,9 +662,9 @@ func (d *Doc) Chunks() []*Chunk {
 <!-- imports: fmt, go/parser, go/scanner, go/token, path/filepath, sort, strings -->
 
 Tangling produces output lines, and for every line it records where the bytes
-came from. A line that was spliced together from a host line and an inline
-chunk has several segments, and an error column gets looked up in those
-segments.
+came from. That record is the whole trick. A line spliced together from a host
+line and an inline chunk has several segments, and an error column gets looked
+up in them.
 
 ```go
 // Seg says that Len bytes of an output line starting at OutCol came from
@@ -700,9 +700,9 @@ type Result struct {
 ```
 
 Every file litgo writes starts with a marker in that language's comment syntax,
-and litgo refuses to overwrite a file that doesn't have the marker. This
-matters because the first thing a new user does is run
-`litgo tangle pool.lit.md` next to a hand-written `pool.go`.
+and litgo refuses to overwrite a file without one. Why so cautious? Because the
+very first thing a new user does is run `litgo tangle pool.lit.md` right next
+to a hand-written `pool.go`.
 
 ```go
 // generatedMarker is the text of the first line of every file litgo writes,
@@ -819,8 +819,8 @@ func (d *Doc) header(f *File) []OutLine {
 
 The generated files are committed, so they should already be clean under gofmt.
 gofmt wants the standard library imports first, then a blank line, then
-everything else, with each group sorted. You can recognise a standard library
-path because its first element has no dot in it.
+everything else, each group sorted. A standard library path is easy to spot:
+its first element has no dot in it.
 
 <!-- chunk: put the imports in the order gofmt wants -->
 ```go
@@ -834,9 +834,10 @@ sort.SliceStable(imports, func(i, j int) bool {
 })
 ```
 
-Expansion is recursive. It carries the stack of chunk names along so it can
-catch a chunk that includes itself, and it carries the stack of reference lines
-along so each segment can record them as its `Via`.
+Expansion is recursive. It carries the stack of chunk names along to catch a
+chunk that includes itself (a snake that really would eat its own tail,
+forever), and the stack of reference lines so each segment can record them as
+its `Via`.
 
 ```go
 type tangler struct {
@@ -887,7 +888,7 @@ func (t *tangler) expand(ref Ref, stack []string, via []int) []OutLine {
 }
 ```
 
-References get recognised before excludes are applied, so an exclude pattern
+References are recognised before excludes are applied, so an exclude pattern
 for comments can't swallow a reference.
 
 ```go
@@ -997,11 +998,11 @@ func (r *Result) HasErrors() bool {
 
 ## From output positions back to the source
 
-The compiler reports a position like `pool.go:31:14`, and `Map` answers with
-the line and column in the Markdown. A column inside indentation that tangling
-added doesn't belong to any segment, so it goes to the nearest segment. A
-generated line (the header, or a blank line between blocks) goes to the nearest
-mapped line above it.
+The compiler says something like `pool.go:31:14`, and `Map` answers with the
+line and column in the Markdown. A column inside indentation that tangling
+added doesn't belong to any segment, so it goes to the nearest one. A generated
+line (the header, or a blank line between blocks) goes to the nearest mapped
+line above it.
 
 ```go
 // Map translates a 0-based output position to the literate source. If the
@@ -1038,8 +1039,8 @@ func (o *Output) Map(line, col int) (srcLine, srcCol int, via []int, ok bool) {
 }
 ```
 
-Go's own parser takes microseconds on a tangled file, so litgo can report
-syntax errors while you type, long before the compiler gets involved.
+Go's own parser gets through a tangled file in microseconds. So litgo reports
+syntax errors while you type, long before the compiler is involved.
 
 ```go
 // SyntaxCheck parses the tangled Go files and reports syntax errors at their
@@ -1076,11 +1077,11 @@ func (r *Result) SyntaxCheck() []Diag {
 ## And from the source to the output
 
 A tool that answers questions about Go (what is this, where is it defined, what
-could come next) has to be asked about the tangled file, at the place where the
-text under the cursor ended up. `Locate` is `Map` backwards. A chunk that is
-used twice gets written twice, and `Locate` returns the first place. The end of
-a segment counts as inside it, because that is where the cursor sits while you
-are typing a word.
+could come next) has to be asked about the tangled file, at the spot where the
+text under your cursor ended up. `Locate` is `Map` run backwards. A chunk used
+twice gets written twice, and `Locate` returns the first place. The end of a
+segment counts as inside it, because that's where the cursor sits while you're
+typing a word.
 
 ```go
 // Locate translates a position in the literate source to the first place
@@ -1099,12 +1100,12 @@ func (r *Result) Locate(line, col int) (o *Output, outLine, outCol int, ok bool)
 }
 ```
 
-A tool like that also proposes edits to the tangled file, and edits need more
-precision than error messages do. `Map` sends a position in generated text to
-the nearest source line. That is fine for a diagnostic but it would be a
-disaster for a replacement. `Exact` only answers for text that came from the
-source. The end of a range is exclusive, so it can touch the end of a segment.
-An empty range is an insertion, and it can sit at either end of a segment.
+That tool also proposes edits to the tangled file, and edits need more
+precision than error messages. `Map` sends a position in generated text to the
+nearest source line. Fine for a diagnostic. A disaster for a replacement.
+`Exact` only answers for text that actually came from the source. The end of a
+range is exclusive, so it can touch the end of a segment. An empty range is an
+insertion, and it can sit at either end of a segment.
 
 ```go
 // Exact is Map for the ends of an edit: it fails rather than approximate.
@@ -1131,30 +1132,29 @@ func (o *Output) Exact(line, col int, end bool) (srcLine, srcCol int, ok bool) {
 ## Two halves of one map
 
 `Map` and `Locate` read the same segments in opposite directions, and
-everything the editor does through gopls goes through both: a request goes out
-through `Locate` and its answer comes back through `Map`. If the two disagreed
-by a column, completion would insert text one character off and a rename would
-eat the letter next to the name. So this is the invariant they keep. Call a
+everything the editor does through gopls passes through both: a request goes
+out through `Locate`, and the answer comes back through `Map`. If they
+disagreed by one column, completion would insert text one character off and a
+rename would eat the letter next to the name. So they keep an invariant. Call a
 byte of the document that tangling wrote somewhere a *tangled character*, $p$,
 and a byte of an output file that a segment covers a *written character*, $q$.
 Then
 
 $$\mathrm{Map}(\mathrm{Locate}(p)) = p$$
 
-for every tangled character, with no exceptions. Going the other way needs one
-qualification, because tangling isn't one-to-one. A chunk that is used twice is
-written twice, so two written characters share one source, and `Locate` can
-only return one of them. It returns the first, which makes
+for every tangled character, no exceptions. The other direction needs one
+qualification, because tangling isn't one-to-one. A chunk used twice is written
+twice, so two written characters share one source, and `Locate` can only return
+one of them. It returns the first, which makes
 
 $$\mathrm{Locate}(\mathrm{Map}(q)) = q$$
 
-true exactly when $q$ is the first copy of its text, and for a later copy it
-gives the first copy instead: a different place that holds the same character
-from the same source. Asking gopls about the first copy of a chunk while the
-cursor is in the chunk is the right question anyway, since the chunk is one
-piece of text however many times it is written.
+true exactly when $q$ is the first copy of its text. For a later copy it gives
+the first copy instead: a different place holding the same character from the
+same source. That's the right question to ask gopls anyway, since a chunk is
+one piece of text no matter how many times it's written.
 
-In other words `Locate` is a right inverse of `Map` everywhere, and a left
+In other words, `Locate` is a right inverse of `Map` everywhere, and a left
 inverse wherever tangling is one-to-one. Each function also accepts positions
 the other never produces, and the invariant says nothing about those:
 
@@ -1165,21 +1165,21 @@ the other never produces, and the invariant says nothing about those:
 | prose, a reference, the markup of a directive | never produced     | fails                    |
 | the end of a segment               | the character before, or the chunk spliced in after | the end of the segment |
 
-The last row is the only place where the two overlap and still disagree, and
-it's on purpose. The end of a segment isn't a character, it's the gap after the
-last one, which is where the cursor sits while a word is being typed. `Locate`
-accepts it so that completion works at the end of a line. `Map` has no use for
-gaps, because a compiler's column always points at a character, so it sends a
-column past the end back to the last character. The function that does invert
-`Locate` there is `Exact`, asked for the end of a range.
+The last row is the one place where the two overlap and still disagree, and
+that's on purpose. The end of a segment isn't a character. It's the gap after
+the last one, where the cursor sits while you type a word. `Locate` accepts it
+so completion works at the end of a line. `Map` has no use for gaps, because a
+compiler's column always points at a character, so it sends a column past the
+end back to the last character. The function that inverts `Locate` there is
+`Exact`, asked for the end of a range.
 
 ### What is proved, and what is tested
 
-Each function does two things: it *finds* a segment, and then it *translates*
-a column through it. The translation is arithmetic, it is where an off-by-one
-would live, and it is the same in all three functions. So it is written once,
-as two methods, and `Map`, `Locate` and `Exact` call them. Their contracts are
-the invariant of this section, stated about one segment, and
+Each function does two things. It *finds* a segment, then it *translates* a
+column through it. The translation is arithmetic, it's where an off-by-one
+would hide, and it's the same in all three functions. So it's written once, as
+two methods, and `Map`, `Locate` and `Exact` all call them. Their contracts are
+this section's invariant, stated about a single segment, and
 [`litgo prove`](#proofs) proves them:
 
 ```go
@@ -1200,32 +1200,30 @@ func (s Seg) src(col int) (c int) { return s.SrcCol + col - s.OutCol }
 //@ Ensures s.out(c) = col
 ```
 
-(The `// @` with a space is what gofmt makes of `//@` inside a doc comment.
-The verifier reads both, and this is the spelling that survives formatting on
-save.)
+(The `// @` with a space is what gofmt makes of `//@` inside a doc comment. The
+verifier reads both, and this spelling survives format-on-save.)
 
 Read the second `Ensures` of each: `src(out(col)) = col` and
 `out(src(col)) = col`, for every segment there could ever be and every column
-in it or at its end, and the first `Ensures` says that the result is a column
-the other function accepts. That is $\mathrm{Map} \circ \mathrm{Locate}$ and
-$\mathrm{Locate} \circ \mathrm{Map}$ being the identity *within a segment*,
-as a theorem rather than as a test that passed.
+in it or at its end. The first `Ensures` says the result is a column the other
+function accepts. That is $\mathrm{Map} \circ \mathrm{Locate}$ and
+$\mathrm{Locate} \circ \mathrm{Map}$ being the identity *within a segment*.
+Not a test that passed. A theorem.
 
-It is not the whole invariant, and it would be wrong to say it was. That
-`Map(Locate(p)) = p` also needs the search in `Map` to arrive at the segment
-the search in `Locate` left from, and that is true because of how tangling
-lays segments out: on one output line they do not overlap, and two segments
-from one source line are either the same text written twice or have a chunk
-reference between them. Those are facts about slices of structs that hold
-slices, built by a recursive splice. The verifier's fragment is integers and
-slices of integers, so it declines, and says so, rather than prove something
-about a simplified model that is not the program. And the unqualified
-statement "`Map` and `Locate` are inverses" is simply not true, as the table
-above says: `Locate(Map(q)) = q` fails for the second copy of a chunk, by
-design. So the division of labour is this. The arithmetic is proved, for all
-inputs. The search, and the layout it relies on, are tested, in
-[Map and Locate undo each other](#map-and-locate-undo-each-other), character
-by character, on documents built to have every awkward case.
+Okay, but that's not the whole invariant, and it would be wrong to pretend it
+was. `Map(Locate(p)) = p` also needs the search in `Map` to land on the segment
+the search in `Locate` started from. That holds because of how tangling lays
+segments out: on one output line they never overlap, and two segments from one
+source line are either the same text written twice or have a chunk reference
+between them. Those are facts about slices of structs holding slices, built by
+a recursive splice. The verifier's world is integers and slices of integers, so
+it declines, and says so, instead of proving something about a simplified model
+that isn't the program. And the bare claim "`Map` and `Locate` are inverses" is
+just false, as the table shows: `Locate(Map(q)) = q` fails for the second copy
+of a chunk, by design. So the labour splits like this. The arithmetic is
+proved, for all inputs. The search, and the layout it relies on, are tested in
+[Map and Locate undo each other](#map-and-locate-undo-each-other), character by
+character, on documents built to have every awkward case.
 
 # Editing structure
 
@@ -1233,10 +1231,10 @@ by character, on documents built to have every awkward case.
 <!-- package: lit -->
 <!-- imports: fmt, strings -->
 
-Two edits change a document's structure. Both are computed here instead of in
-the editor, so they can be tested and so any editor can offer them. An edit
-replaces a range of lines. A list of edits is ordered from the bottom up, so
-you can apply them one after another without adjusting any line numbers.
+Two edits change the shape of a document. litgo computes both of them, not
+the editor, so they can be tested, and so any editor can offer them. An edit
+replaces a range of lines. A list of edits runs from the bottom up, so you can
+apply them one after another and never adjust a line number.
 
 ```go
 // Edit replaces source lines [Start, End) with Lines. A list of edits is
@@ -1265,9 +1263,9 @@ type UntangleResult struct {
 }
 ```
 
-**Untangle** creates a named chunk from a highlighted region. You should use it 
-whenever you are looking at a large block of code and think "this part should be collapsed
-and moved to it's own part of the document".
+**Untangle** turns a highlighted region into a named chunk. Reach for it when
+you are staring at a wall of code and think "this part should fold up and move
+to its own spot in the document".
 
 ```go
 // Untangle moves the selection into a new named chunk at the bottom of the
@@ -1419,9 +1417,9 @@ func Apply(lines []string, edits []Edit) []string {
 }
 ```
 
-**Rename** changes a chunk's name at every definition and every use. This means
-the heuristic that named the chunk only has to be good enough to keep you
-moving, because a better name is one command away.
+**Rename** changes a chunk's name at every definition and every use. That takes
+the pressure off the heuristic that named the chunk. Its guess only has to be
+good enough to keep you moving, because a better name is one command away.
 
 ```go
 // ChunkAt names the chunk a line belongs to: a reference on the line, the
@@ -1507,9 +1505,9 @@ func (d *Doc) Rename(from, to string) ([]Edit, error) {
 An editor that speaks the Language Server Protocol asks its questions about a
 position: what is defined *here*, rename what is *here*. `ChunkAt` is generous
 and accepts any line in a chunk's block, which is what a command wants. But
-inside a block the thing under the cursor is Go, and questions about it should
-be answered by Go tooling. A chunk's name is only *mentioned* in two places: in
-a reference, and in the directive that names it.
+inside a block, the thing under the cursor is Go, and Go tooling should answer
+for it. A chunk's name is only *mentioned* in two places: in a reference, and in
+the directive that names it.
 
 ```go
 // Mention is a place where a chunk's name is written. Col and EndCol span
@@ -1562,9 +1560,9 @@ func (d *Doc) MentionAt(line, col int) *Mention {
 
 The other edit a language server asks for is a new import, when it completes a
 name from a package the file doesn't import yet. The server proposes a new line
-for the `import (` block, but the document has no block like that. litgo
-generates it from the `imports:` directive, so the directive is the thing that
-gets the new entry.
+for the `import (` block. Problem: the document has no such block. litgo
+generates it from the `imports:` directive, so the directive is what gets the
+new entry.
 
 ```go
 // AddImport says what to insert, and where, for a file to import one more
@@ -1592,7 +1590,7 @@ func (d *Doc) AddImport(f *File, alias, path string) (line, col int, text string
 If the code starts with a comment, that comment is the author's own summary, so
 it becomes the name. Otherwise the shape of the first statement decides.
 `for job := range jobs` becomes *for each job in jobs*, `if err != nil` becomes
-*handle err*, and a `select` gets named after the channels in its cases.
+*handle err*, and a `select` is named after the channels in its cases.
 
 ```go
 // SuggestName proposes a chunk name for extracted code. A leading comment is
@@ -1870,8 +1868,8 @@ func clip(s string) string {
 <!-- package: lit -->
 <!-- imports: fmt, regexp, strings, github.com/tlehman/litgo/internal/latex, github.com/tlehman/litgo/internal/mermaid -->
 
-After every change the editor sends the buffer to litgo and gets back one
-answer with everything it needs: what to draw in place of the source, where the
+After every change, the editor sends the buffer to litgo and gets back one
+answer with everything it needs: what to draw over the source, where the
 chunks are, and what is wrong.
 
 ```go
@@ -2030,11 +2028,11 @@ func plural(n int) string {
 
 ## Finding the annotations
 
-A `//@` comment is a specification ([Proofs](#proofs) has the whole story), and
-to a syntax highlighter it is a comment like any other, grey and easy to skip.
-It is the most carefully chosen line in the block, so the editor gets told
-where the annotations are: the item runs from the `//@` to the end of the line,
-and `Name` is the keyword, which an editor can set apart from the formula.
+A `//@` comment is a specification ([Proofs](#proofs) has the whole story). To
+a syntax highlighter it's just another comment, grey and easy to skip. But it is
+the most carefully chosen line in the block, so the editor is told where the
+annotations are. The item runs from the `//@` to the end of the line, and `Name`
+is the keyword, which an editor can set apart from the formula.
 
 ```go
 // ProofKeywords are the words an annotation can start with. One that starts
@@ -2094,20 +2092,19 @@ func (d *Doc) proofItems(b *Block, o AnalyzeOptions) []Item {
 }
 ```
 
-A formula is ASCII so that it can be typed, and mathematics so that it can be
-read, and those pull in different directions: `lo*lo <= n ^ n < hi*hi` is
-what the keyboard has, and $lo^2 \leq n \land n < hi^2$ is what
-it means. The prose of a document already gets this treatment, where `$...$`
-is drawn as Unicode and turns back into its source under the cursor. So a
-formula is translated into the LaTeX it would have been in the prose, and
-handed to the same renderer. It comes out looking like the math around it,
-italic letters and all, and nothing here knows what a `≤` is.
+A formula is ASCII so it can be typed, and mathematics so it can be read, and
+those two pull in opposite directions. `lo*lo <= n ^ n < hi*hi` is what the
+keyboard has. $lo^2 \leq n \land n < hi^2$ is what it means. The prose already
+gets this treatment: `$...$` is drawn as Unicode and turns back into its source
+under the cursor. So a formula is translated into the LaTeX it would have been
+in the prose, and handed to the same renderer. It comes out looking like the
+math around it, italic letters and all, and nothing here knows what a `≤` is.
 
-The translation is a scan for words and operators. It does not parse, because
-it has to be right about a formula that is half typed. The one thing that
-needs care is `v`, which is *or* between two operands and a variable
-anywhere else. If the renderer leaves a backslash in its answer there was
-something it did not know, and the source is better than a guess.
+The translation is a scan for words and operators. It doesn't parse, because it
+has to be right about a formula that is only half typed. The one tricky letter
+is `v`, which means *or* between two operands and is a variable anywhere else.
+If the renderer leaves a backslash in its answer, it met something it didn't
+know, and the raw source beats a guess.
 
 ```go
 // proofOps are the operators of a formula, longest first, and their LaTeX.
@@ -2383,19 +2380,19 @@ func inlineMath(line string, lineNo int, o AnalyzeOptions) []Item {
 
 ## Finding the tables
 
-A table is a header row, then a rule like `|---|:-:|`, then the rows under it.
-The source of a table is hard to read when the cells have different lengths,
-because the pipes don't line up. The editor fixes that in place. It leaves
-every line where it is and adds spaces in front of the pipes until they line
-up.
+A table is a header row, then a rule like `|---|:-:|`, then the rows. When the
+cells have different lengths, the pipes zigzag and the source is hard to read.
+The editor straightens them in place. Every line stays where it is, and spaces
+go in front of the pipes until they line up.
 
-To do that the editor has to know how wide each cell looks, and that is not
-how wide its source is. Math gets drawn as Unicode, and the backticks around
-code, the asterisks around emphasis and the address of a link are hidden. So
-for each cell litgo says where it is in the line and what its text looks like
-once all of that has happened. It also lists the pieces of markup to hide, so
-the editor hides exactly what was left out of the text, whether or not it would
-have hidden it anyway. The colons in the rule say how each column is aligned.
+Here's the catch: to do that, the editor needs to know how wide each cell
+*looks*, and that isn't how wide its source is. Math is drawn as Unicode, and
+the backticks around code, the asterisks around emphasis and the address of a
+link are all hidden. So for each cell litgo reports where it sits in the line
+and what its text looks like after all of that. It also lists the pieces of
+markup to hide, so the editor hides exactly what was left out of the text,
+whether or not it would have hidden it anyway. The colons in the rule say how
+each column is aligned.
 
 ```go
 // Table is what an editor needs to line up the columns of a table in place.
@@ -2505,9 +2502,9 @@ func cells(line string) []Cell {
 ```
 
 Math is left to `inlineMath`, which the editor draws the same way in a table as
-anywhere else. Everything between the formulas is searched for markup. Each
+anywhere else. Everything between the formulas gets searched for markup. Each
 kind of markup is one alternative in the pattern, with a group around the part
-that stays visible. What is in the match but outside of the group gets hidden.
+that stays visible. Whatever is in the match but outside the group is hidden.
 
 ```go
 var markupRe = regexp.MustCompile("`+([^`]+)`+" + `|\*\*([^*]+)\*\*|\*([^*]+)\*|\[([^\]]+)\]\([^)]*\)|\\(\|)`)
@@ -2547,7 +2544,7 @@ func cellText(line string, col, end int, o AnalyzeOptions) (string, [][2]int) {
 ## Tests
 
 The sample documents in these tests are full of reference syntax that is only
-meant as data. The `verbatim` directive exists for exactly this case.
+data. The `verbatim` directive exists for exactly this.
 
 <!-- file: internal/lit/lit_test.go -->
 <!-- package: lit -->
@@ -2660,13 +2657,13 @@ func TestLocateAndExact(t *testing.T) {
 
 ## Map and Locate undo each other
 
-The tests above check `Map` and `Locate` at a few chosen positions. The
-invariant from [Two halves of one map](#two-halves-of-one-map) is a claim about
-every position, so these tests visit every one: each byte of each segment of
-each file, in three documents. `sample` has an inline chunk spliced into the
-middle of a line, `multi` tangles to several files in several languages, and
-`twice` is here for the one thing the others lack, a chunk that is written
-twice, at two different depths of indentation.
+The tests above check `Map` and `Locate` at a few hand-picked positions. But
+the invariant from [Two halves of one map](#two-halves-of-one-map) makes a
+claim about *every* position, so these tests visit every one: each byte of each
+segment of each file, in three documents. `sample` has an inline chunk spliced
+into the middle of a line. `multi` tangles to several files in several
+languages. `twice` covers the one thing the others lack, a chunk written twice,
+at two different depths of indentation.
 
 <!-- verbatim -->
 ```go
@@ -2706,7 +2703,7 @@ func chars(res *Result) []char {
 
 From the source and back is the half with no exceptions. Wherever a tangled
 character was written, and however many times, `Locate` finds a place and `Map`
-returns from it to the very byte that was asked about.
+returns from it to the very byte that was asked about. Every time.
 
 ```go
 func TestMapUndoesLocate(t *testing.T) {
@@ -2731,11 +2728,11 @@ func TestMapUndoesLocate(t *testing.T) {
 ```
 
 From the output and back, `Map` is exact on every written character, and
-`Locate` returns to the same place if that place is the first copy. From a
-later copy it returns to the first one, and the test pins down what "the first
-one" means: an earlier position whose source is the same byte. The test also
-makes sure that `twice` really has later copies and that the other two
-documents really don't. Otherwise that branch could pass by never running.
+`Locate` returns to the same place if that place is the first copy. From a later
+copy it returns to the first one, and the test pins down what "the first one"
+means: an earlier position whose source is the same byte. The test also checks
+that `twice` really has later copies and the other two documents really don't.
+Otherwise that branch could pass by never running at all.
 
 ```go
 func TestLocateUndoesMap(t *testing.T) {
@@ -2772,8 +2769,8 @@ func TestLocateUndoesMap(t *testing.T) {
 ```
 
 Last come the positions outside the invariant, one test for each row of the
-table. They are here so that a change to any of them is a decision somebody
-makes, and not an accident.
+table. They're here so that changing any of them is a decision somebody makes,
+not an accident.
 
 ```go
 func TestWhereTheInverseStops(t *testing.T) {
@@ -3179,9 +3176,9 @@ func TestFilesLanguagesVerbatim(t *testing.T) {
 
 # Math in a character grid
 
-A terminal can't typeset math, but Unicode gets you a long way.
+A terminal can't typeset math. Unicode gets you surprisingly far anyway.
 $\sum_{i=1}^{n} i^2$ has a perfectly readable one-line form, and display math
-can be laid out in two dimensions, using box-drawing characters for fraction
+can be laid out in two dimensions, with box-drawing characters for the fraction
 bars and brackets:
 
 $$
@@ -3189,8 +3186,8 @@ x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}
 $$
 
 Package `latex` is a small renderer that turns TeX into text. A
-recursive-descent parser builds a tree, and a layout pass turns the tree into
-boxes of text.
+recursive-descent parser (one function per grammar rule, each calling the next)
+builds a tree, and a layout pass turns the tree into boxes of text.
 
 ## The tree
 
@@ -3309,9 +3306,9 @@ func (p *parser) rawGroup() string {
 ```
 
 Rows and cells are the outermost structure, because `&` and `\\` can show up
-bare at the top level of display math as well as inside an environment. A
-sequence ends when it reaches something its caller has to handle: a closing
-brace, a cell or row separator, `\end`, or `\right`.
+bare at the top level of display math, not just inside an environment. A
+sequence stops at anything its caller has to handle: a closing brace, a cell or
+row separator, `\end`, or `\right`.
 
 ```go
 // rows parses cells separated by & and rows separated by \\ until a
@@ -3450,9 +3447,9 @@ func (p *parser) parseAtom() *node {
 }
 ```
 
-Commands that take arguments are handled one by one, and everything else gets
-looked up in the symbol tables. An unknown command is shown the way it was
-written, because in an editor that is more useful than an error.
+Commands that take arguments get handled one by one. Everything else is looked
+up in the symbol tables. An unknown command is shown exactly as it was written,
+because in an editor that beats an error message.
 
 ```go
 func (p *parser) parseCommand() *node {
@@ -3618,10 +3615,10 @@ func parse(src string) *node {
 <!-- file: internal/latex/symbols.go -->
 <!-- package: latex -->
 
-These are the symbol tables. Letters in math are italic, and Unicode has italic
-letters in the Mathematical Alphanumeric Symbols block. That block has holes
-where a letter had already been encoded somewhere else (the italic *h* is the
-Planck constant, ℎ).
+Here are the symbol tables. Letters in math are italic, and Unicode has italic
+letters in its Mathematical Alphanumeric Symbols block. The block has holes,
+though, wherever a letter had already been encoded somewhere else. (The italic
+*h* is the Planck constant, ℎ. Physicists got there first.)
 
 ```go
 // symbols maps LaTeX commands to Unicode.
@@ -3813,9 +3810,9 @@ type ctx struct {
 }
 ```
 
-A box is some lines of text plus the index of its baseline. Boxes get joined
-horizontally with their baselines aligned, or stacked vertically. Widths count
-characters instead of bytes, and combining marks count as zero.
+A box is a few lines of text plus the index of its baseline. Boxes join
+side by side with their baselines lined up, or stack on top of each other.
+Widths count characters, not bytes, and combining marks count as zero.
 
 ```go
 // box is a block of text with a baseline row.
@@ -3969,10 +3966,9 @@ func (c ctx) chars(s string) string {
 }
 ```
 
-TeX spaces a formula according to the class of each atom. litgo only does a
-small part of that. Relations and binary operators get a space on both sides, a
-sign right after an opening bracket gets none, and function names get a space
-after them.
+TeX spaces a formula by the class of each atom. litgo does a small slice of
+that. Relations and binary operators get a space on both sides, a sign right
+after an opening bracket gets none, and function names get a space after them.
 
 ```go
 func isOpen(n *node) bool {
@@ -4045,8 +4041,8 @@ func (c ctx) accent(n *node) box {
 }
 ```
 
-A fraction gets stacked in display mode and flattened to $a/b$ inline, with
-parentheses added when an operand would be misread without them.
+A fraction is stacked in display mode and flattened to $a/b$ inline, with
+parentheses added wherever an operand would be misread without them.
 
 ```go
 // needsParens reports whether a flattened operand would be misread without
@@ -4149,8 +4145,8 @@ func (c ctx) sqrt(n *node) box {
 
 Subscripts and superscripts use the real Unicode script characters when every
 character in the script has one, and fall back to `^(...)` when one is missing.
-For example, there is a superscript *n* but no superscript *q*. In display mode
-the big operators get their limits above and below.
+There is a superscript *n*, for example, but no superscript *q*. Don't ask me
+why. In display mode the big operators get their limits above and below.
 
 ```go
 func mapAll(s string, table map[rune]rune) (string, bool) {
@@ -4224,8 +4220,8 @@ func (c ctx) scripts(n *node) box {
 }
 ```
 
-Delimiters grow to fit what they enclose. They are built from the bracket
-pieces that Unicode has for exactly this purpose.
+Delimiters grow to fit what they hold. They're built from the bracket pieces
+Unicode includes for exactly this job.
 
 ```go
 var integrals = map[string]bool{"∫": true, "∬": true, "∭": true, "∮": true}
@@ -4453,9 +4449,10 @@ func TestMalformedDoesNotPanic(t *testing.T) {
 
 # Diagrams in a character grid
 
-The `mermaid` package draws the three kinds of Mermaid diagram that are most useful
-for explaining a program: flowcharts, state diagrams and sequence diagrams. A
-flowchart goes through the classic pipeline for layered graph drawing:
+The `mermaid` package draws the three kinds of Mermaid diagram that do the
+most for explaining a program: flowcharts, state diagrams and sequence
+diagrams. A flowchart goes through the classic pipeline for layered graph
+drawing:
 
 ```mermaid
 flowchart LR
@@ -4469,10 +4466,10 @@ flowchart LR
 <!-- package: mermaid -->
 <!-- imports: strings -->
 
-litgo doesn't draw lines as characters directly. Each cell records which of its
-four sides a stroke leaves through, and the character gets chosen at the end.
-This means the right junction character shows up automatically wherever an edge
-meets a box or two edges cross.
+litgo doesn't draw lines as characters. Each cell records which of its four
+sides a stroke leaves through, and the character is picked at the very end.
+So the right junction shows up by itself, wherever an edge meets a box or two
+edges cross.
 
 ```go
 // Direction bits of the line strokes leaving a cell.
@@ -4507,8 +4504,8 @@ type canvas struct {
 }
 ```
 
-`at` hands out pointers into slices that `grow` might reallocate, so a stroke
-grows the canvas first and only then takes pointers.
+`at` hands out pointers into slices that `grow` might reallocate. So a stroke
+grows the canvas first, and only then takes pointers.
 
 ```go
 func (c *canvas) grow(x, y int) {
@@ -4737,7 +4734,7 @@ func cleanLabel(s string) []string {
 ```
 
 A statement is a chain: a group of nodes, a link, another group, another link,
-and so on. `A & B --> C` fans in, and `A --> B --> C` keeps the chain going.
+and so on. `A & B --> C` fans in. `A --> B --> C` keeps the chain going.
 
 ```go
 type stmt struct {
@@ -4915,7 +4912,7 @@ func parseFlowchart(lines []string) (*graph, error) {
 }
 ```
 
-A state diagram is a flowchart with different punctuation.
+A state diagram is a flowchart with different punctuation. That's it.
 
 ```go
 var (
@@ -5008,10 +5005,10 @@ func Render(src string) ([]string, error) {
 <!-- package: mermaid -->
 <!-- imports: sort, unicode/utf8 -->
 
-The layout uses two abstract axes. The *rank* axis is the direction the graph
-flows in, and the *order* axis goes across it. Top-down and left-to-right
-diagrams are the same computation with the axes swapped at drawing time, and
-bottom-up and right-to-left diagrams are mirror images of those two.
+The layout works on two abstract axes. The *rank* axis is the direction the
+graph flows, and the *order* axis runs across it. Top-down and left-to-right
+are the same computation with the axes swapped at drawing time, and bottom-up
+and right-to-left are mirror images of those two.
 
 ```go
 // seg is one rank-to-rank hop of an edge; long edges become chains of
@@ -5052,9 +5049,9 @@ func (g *graph) render() []string {
 }
 ```
 
-To break cycles, the layout reverses the back edges while it computes ranks.
-They still get drawn with the arrowhead at the correct end. After that, a
-node's rank is the length of its longest path from a source.
+Cycles come first. The layout reverses the back edges while it computes ranks
+(they still get drawn with the arrowhead at the right end), and then a node's
+rank is the length of its longest path from a source.
 
 ```go
 // rank breaks cycles, then assigns each node its longest-path depth.
@@ -5168,9 +5165,9 @@ func (l *layout) split() {
 }
 ```
 
-Within a rank, the nodes get ordered to reduce crossings. The layout repeatedly
-sorts each rank by the average position of each node's neighbours in the
-adjacent rank.
+Inside a rank, the nodes are ordered to cut down on crossings. The layout
+keeps sorting each rank by the average position of each node's neighbours in
+the rank next to it.
 
 ```go
 func (l *layout) crossings() int {
@@ -5364,10 +5361,10 @@ func (l *layout) placeO() {
 }
 ```
 
-An edge leaves a node from the middle of its side, runs to a *track* in the gap
-between two ranks, follows the track, and then goes on to its target. All the
-edges from one source share a track, so they look like a tree. Different
-sources get different tracks, so edges only merge where they really do merge.
+An edge leaves a node from the middle of its side, runs to a *track* in the
+gap between two ranks, follows the track, and then heads for its target. All
+the edges from one source share a track, so they look like a tree. Different
+sources get different tracks, so edges only merge where they really merge.
 
 ```go
 // Back edges get their own port, off-centre, so they neither share a trunk
@@ -5679,7 +5676,7 @@ func abs(n int) int {
 <!-- imports: fmt, regexp, strings, unicode/utf8 -->
 
 Participants go across the top and time runs down. The columns are spaced so
-that every message label fits between the lifelines it spans.
+every message label fits between the lifelines it spans.
 
 ```go
 type participant struct {
@@ -5983,13 +5980,13 @@ func TestUnsupportedAndMalformed(t *testing.T) {
 <!-- package: weave -->
 <!-- imports: fmt, html, os, os/exec, path/filepath, regexp, strings, github.com/tlehman/litgo/internal/lit, github.com/tlehman/litgo/internal/mermaid -->
 
-Weaving turns the document into something you can read: a PDF typeset by
+Weaving turns the document into something you read: a PDF typeset by
 [Typst](https://typst.app), or an HTML page. pandoc does the Markdown
-conversion and translates the TeX math into whatever the output format wants.
-litgo adds the things the source hides. The `chunk:` and `file:` directives are
-invisible as HTML comments, so they become headings over their blocks, with
-links from each chunk to the places that use it and from each reference to its
-chunk.
+conversion and translates the TeX math into whatever the output wants. litgo
+adds what the source hides. The `chunk:` and `file:` directives are HTML
+comments, invisible on the page, so they become headings over their blocks,
+with links from each chunk to the places that use it and from each reference
+back to its chunk.
 
 ```mermaid
 flowchart LR
@@ -5998,7 +5995,8 @@ flowchart LR
     pandoc --> html[name.html]
 ```
 
-Each format has it's own `target` so that it can customize how things like escaping work.
+Each format has its own `target`, so it can decide things like escaping for
+itself.
 
 ```go
 var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
@@ -6025,8 +6023,8 @@ type target struct {
 }
 ```
 
-The woven Markdown is the source with some lines added before, after, or in
-place of some of its lines.
+The woven Markdown is the source, with some lines added before, after, or in
+place of a few of its lines.
 
 ```go
 func weave(d *lit.Doc, t target) string {
@@ -6057,7 +6055,7 @@ func weave(d *lit.Doc, t target) string {
 ```
 
 Only the first block of a chunk gets the anchor. Later blocks with the same
-name continue the chunk, and the sign says so, using the notation literate
+name continue the chunk, and the sign says so, in the notation literate
 programs have used since WEB.
 
 <!-- chunk: label every chunk with its name and its uses -->
@@ -6090,11 +6088,11 @@ for _, b := range d.Blocks {
 }
 ```
 
-A web page can load mermaid.js but a PDF can't, so the diagrams have to be
-drawn before Typst sees them. If mermaid.js has drawn a block, its SVG goes in
-as a figure. Otherwise litgo already knows how to draw a diagram with box
-characters, and in a monospaced font that still makes a decent figure. If litgo
-can't draw a diagram either, it stays as source.
+A web page can load mermaid.js. A PDF can't, so the diagrams have to be drawn
+before Typst ever sees them. If mermaid.js drew a block, its SVG goes in as a
+figure. If not, litgo already knows how to draw a diagram with box characters,
+and in a monospaced font that still makes a decent figure. If litgo can't draw
+it either, it stays as source.
 
 <!-- chunk: draw the diagrams if the format cannot -->
 ```go
@@ -6117,15 +6115,15 @@ if t.diagrams {
 ```
 
 The drawing is done by [mermaid-cli](https://github.com/mermaid-js/mermaid-cli),
-which runs mermaid.js in a headless browser. Starting a browser is slow, so all
-the diagrams go to `mmdc` at once, as a Markdown file of nothing but Mermaid
-blocks. It writes `out-1.svg`, `out-2.svg` and so on beside the name it's given.
-One diagram with a mistake in it fails the whole batch, and then each diagram
-gets a run of its own so that only the broken one is drawn as text. Without
-`mmdc` they all are.
+which runs mermaid.js in a headless browser. Starting a browser is slow, so
+every diagram goes to `mmdc` in one trip, as a Markdown file of nothing but
+Mermaid blocks. It writes `out-1.svg`, `out-2.svg` and so on beside the name
+it's given. The catch: one diagram with a mistake fails the whole batch. When
+that happens each diagram gets a run of its own, so only the broken one is drawn
+as text. Without `mmdc`, they all are.
 
-Typst draws SVG text itself, but not the HTML that mermaid.js likes to put in
-labels, so `htmlLabels` is off.
+Typst draws SVG text itself, but not the HTML that mermaid.js likes to stuff
+into labels, so `htmlLabels` is off.
 
 ```go
 // drawn returns the SVG of each Mermaid block that mermaid-cli could draw,
@@ -6195,9 +6193,9 @@ func mmdc(bin string, srcs []string) []string {
 }
 ```
 
-References in woven code are shown as ⟨names⟩ and linked. That shouldn't happen
-to text that only looks like a reference, which means `verbatim` blocks and
-illustrations that aren't tangled at all.
+References in woven code show up as ⟨names⟩, with links. Text that only looks
+like a reference shouldn't get that treatment, which means `verbatim` blocks
+and illustrations that aren't tangled at all.
 
 <!-- chunk: mark the blocks whose references are only text -->
 ```go
@@ -6335,17 +6333,17 @@ func Markdown(d *lit.Doc) string { return weave(d, htmlTarget) }
 
 KaTeX typesets the math and mermaid.js draws the diagrams. pandoc writes a
 table of contents from the `#` and `##` headings, and where it goes depends on
-the width of the window. On a wide screen it is a column down the left of the
-text, fixed in place while the text scrolls. On a narrow one it is folded away
-behind a button in the corner, and unfolds over the text when asked. That is
-all stylesheet: the button is a label for a checkbox that pandoc is asked to
-put in front of the contents, and the checkbox's state chooses the rules. The
-script does the two things the stylesheet can't. It drops the title's own
-entry when the title is the only `#`, so the contents are what comes after,
-and as the page scrolls it marks the section the reader is in. It leaves the
-history alone, so a link in the contents is a link, and the back button undoes
-it. Markdown can't link references inside highlighted code, so a few more
-lines turn the comments that hold references into links after the page loads.
+the width of the window. On a wide screen it's a column down the left, pinned in
+place while the text scrolls. On a narrow one it folds away behind a button in
+the corner and opens over the text when asked. That part is all stylesheet: the
+button is a label for a checkbox that pandoc puts in front of the contents, and
+the checkbox's state picks the rules. The script does the two things a
+stylesheet can't. It drops the title's own entry when the title is the only `#`,
+so the contents start with what comes after, and it marks the section the reader
+is in as the page scrolls. It leaves the history alone, so a link in the
+contents is just a link, and the back button undoes it. Markdown can't link
+references inside highlighted code, so a few more lines turn the comments that
+hold references into links once the page loads.
 
 ```go
 // HTML weaves a standalone page.
@@ -6512,9 +6510,9 @@ if (diagrams.length) {
 <!-- package: weave -->
 <!-- imports: _ embed, fmt, os/exec, path/filepath, strings, github.com/tlehman/litgo/internal/lit -->
 
-For Typst, litgo's additions are calls to functions that the preamble defines,
-and they pass through pandoc as raw Typst. Text is passed as string literals,
-so nothing in a chunk name can be mistaken for markup.
+For Typst, litgo's additions are calls to functions the preamble defines, and
+they pass through pandoc as raw Typst. Text goes in as string literals, so
+nothing in a chunk name can be mistaken for markup.
 
 ```go
 func rawTypst(code string) string { return "```{=typst}\n" + code + "\n```\n" }
@@ -6543,11 +6541,10 @@ var typstTarget = target{
 }
 ```
 
-The Typst source is made of a few definitions that describe the document, then
-the preamble, then pandoc's rendering of the woven Markdown. The list of chunk
-anchors is in there because Typst refuses to compile a link to a label that
-doesn't exist, and one reference to an undefined chunk shouldn't cost the
-reader the whole PDF.
+The Typst source is a few definitions that describe the document, then the
+preamble, then pandoc's rendering of the woven Markdown. Why the list of chunk
+anchors? Typst refuses to compile a link to a label that doesn't exist, and one
+reference to an undefined chunk shouldn't cost the reader the whole PDF.
 
 ```go
 //go:embed preamble.typ
@@ -6609,8 +6606,8 @@ func PDF(d *lit.Doc, out string) error {
 <!-- file: internal/weave/preamble.typ -->
 
 This sets up the page. Every font named here ships inside Typst, so the PDF
-looks the same everywhere. A document with several top-level headings is
-treated as a book, so it gets a table of contents and each chapter starts on a
+looks the same on every machine. A document with several top-level headings is
+treated as a book: it gets a table of contents, and each chapter starts on a
 new page.
 
 ```typ
@@ -6630,7 +6627,7 @@ new page.
 #show figure.where(kind: table): set par(justify: false)
 ```
 
-pandoc's output expects these two names, which normally come from pandoc's own
+pandoc's output expects these two names. Normally they come from pandoc's own
 template.
 
 ```typ
@@ -6639,8 +6636,8 @@ template.
 ```
 
 Code sits on a tinted block. A drawn diagram arrives as a block in the language
-`diagram`, and it gets set as a figure instead: centred, untinted, and never
-broken across pages.
+`diagram`, and gets set as a figure instead: centred, untinted, and never split
+across pages.
 
 ```typ
 #show raw: set text(font: "DejaVu Sans Mono")
@@ -6658,9 +6655,9 @@ broken across pages.
 }
 ```
 
-A diagram that mermaid.js drew arrives as SVG. mermaid.js sizes it for a screen,
-with 16px text, so it's scaled down to sit beside 10.5pt prose, and further if
-that's what it takes to fit the page.
+A diagram that mermaid.js drew arrives as SVG. mermaid.js sizes it for a
+screen, with 16px text, so it gets scaled down to sit beside 10.5pt prose, and
+further still if that's what it takes to fit the page.
 
 ```typ
 #let lit-figure(svg) = layout(page => {
@@ -6672,10 +6669,10 @@ that's what it takes to fit the page.
 })
 ```
 
-A reference in code is a comment that holds a name in double angle brackets.
-The name gets shown the way the editor shows it, and linked to its chunk if
-there is one. By the time a show rule sees the comment, the syntax highlighter
-has already cut it into tokens, so the rule only looks for the brackets and
+A reference in code is a comment holding a name in double angle brackets. The
+name is shown the way the editor shows it, and linked to its chunk if there is
+one. By the time a show rule sees the comment, the syntax highlighter has
+already chopped it into tokens, so the rule only looks for the brackets and
 leaves the comment marker alone. The rule is switched off between
 `lit-literal.update(true)` and `(false)`.
 
@@ -6697,8 +6694,8 @@ leaves the comment marker alone. The rule is switched off between
 }
 ```
 
-This is the heading over a chunk. It has the chunk's name and sign on the left,
-its uses on the right, and the label that references link to. It sticks to the
+This is the heading over a chunk: the chunk's name and sign on the left, its
+uses on the right, and the label that references link to. It sticks to the
 block below it.
 
 ```typ
@@ -6719,7 +6716,7 @@ block below it.
 })
 ```
 
-The title gets taken out of the body and set here, above the summary of the
+The title is lifted out of the body and set here, above the summary of the
 files the document tangles to.
 
 ```typ
@@ -6737,7 +6734,7 @@ files the document tangles to.
 <!-- imports: strings, testing, github.com/tlehman/litgo/internal/lit -->
 
 pandoc and Typst might not be installed where the tests run, so the test stops
-before them and checks what litgo hands to them.
+short of them and checks what litgo would hand them.
 
 <!-- verbatim -->
 ```go
@@ -6786,20 +6783,19 @@ func TestWeaveForHTML(t *testing.T) {
 
 # Proofs
 
-A test says that a program did the right thing the times somebody looked. A
-proof says that it does the right thing every time. For a long while only the
-first was practical, and the reason was never the checking, which a machine
-does. It was writing down *what* to check: the precondition, the invariant of
-every loop, the quantity that shrinks. That is the part a coding agent is good
-at proposing and a person is good at reading, and a literate program is the
-natural place for it, because the argument for why a loop is right is exactly
+A test tells you the program did the right thing the times somebody looked. A
+proof tells you it does the right thing every time. For a long time only the
+first was practical, and the checking was never the hard part (a machine does
+that). The hard part was writing down *what* to check: the precondition, the
+invariant of every loop, the quantity that shrinks. A coding agent is good at
+proposing those, and a person is good at reading them. A literate program is
+their natural home, because the argument for why a loop is right is exactly
 what the prose around the loop was trying to say anyway.
 
 [VeGo](https://arxiv.org/abs/2608.22630) (Verified Go, by Tina Massoudi and
-Chris Dutchyn) is a notation for that argument. The specifications are
-comments that start with `//@`, so an annotated program is still plain Go: it
-compiles, runs and formats the way it did before. litgo reads those comments
-and checks them.
+Chris Dutchyn) is a notation for that argument. The specifications are comments
+that start with `//@`, so an annotated program is still plain Go. It compiles,
+runs and formats exactly as before. litgo reads those comments and checks them.
 
 <!-- notangle -->
 ```go
@@ -6824,37 +6820,38 @@ flowchart LR
     prover -->|not proved, at a line of the Markdown| doc
 ```
 
-The paper's own checker, `vegop`, has not been published, so litgo has one of
-its own, in this chapter. It follows the paper's design in the ways that
-matter: it runs natively in Go with no SMT solver behind it, it works through
-a function one assignment at a time, giving every assignment a new name the
-way SSA form does, and it settles its verification conditions with
+The paper's own checker, `vegop`, hasn't been published, so litgo brings its
+own, and it lives in this chapter. It follows the paper's design where it
+counts. It runs natively in Go, with no SMT solver behind it (a general-purpose
+logic engine like Z3, which most verifiers lean on). It works through a
+function one assignment at a time, giving every assignment a new name the way
+SSA form does. And it settles its verification conditions with
 Fourier-Motzkin elimination over linear integer arithmetic.
 
-It is a deductive verifier, and two properties are worth stating plainly.
+It is a deductive verifier, and two things about it deserve to be said plainly.
 
-* **It is sound and incomplete, on purpose.** "Proved" means that the
-  hypotheses and the negated goal were shown to have no model. Everything the
-  prover does on the way (instantiating a quantifier at a few terms, treating
-  `x*y` as an unknown of its own, giving up when a budget runs out) can only
-  make it fail to find a proof, never find a wrong one. So the two answers are
-  *proved* and *not proved*, and "not proved" sometimes means "true, but say
-  more in the invariant".
-* **It refuses what it does not understand.** The fragment is integers,
-  booleans, slices of integers that are read but not written, integer fields
-  of structs, `if`, `for`, `range`, `break`, `continue`, `return`, and calls
-  of other annotated functions. A function with annotations that steps outside
-  that fragment is reported as *not verified*, with the statement that was too
-  much. An unchecked contract is worse than none.
+* **It is sound and incomplete, on purpose.** "Proved" means the hypotheses
+  and the negated goal were shown to have no model (no choice of values makes
+  them all true at once). Every shortcut the prover takes (instantiating a
+  quantifier at a few terms, treating `x*y` as an unknown of its own, giving up
+  when a budget runs out) can only make it miss a proof, never find a wrong
+  one. So the two answers are *proved* and *not proved*, and "not proved"
+  sometimes means "true, but say more in the invariant".
+* **It refuses what it does not understand.** The fragment it handles is
+  integers, booleans, slices of integers that are read but not written,
+  integer fields of structs, `if`, `for`, `range`, `break`, `continue`,
+  `return`, and calls of other annotated functions. An annotated function that
+  steps outside that fragment is reported as *not verified*, naming the
+  statement that was too much. An unchecked contract is worse than none.
 
 What a proof covers: every `Ensures` on every path to every `return`; every
-`Invariant`, on entry and around the loop; termination, where a `Variant` or a
-`Measure` is given; every index within its slice and every divisor not zero;
-the `Requires` of every call. What it does not cover: integers are the
-mathematical ones, so overflow is out of sight, as it is in the paper; and a
-`nil` pointer to a struct is not considered.
+`Invariant`, on entry and around the loop; termination, wherever a `Variant` or
+a `Measure` is given; every index inside its slice and every divisor not zero;
+the `Requires` of every call. What it doesn't cover: integers are the
+mathematical ones, so overflow is out of sight (as it is in the paper), and a
+`nil` pointer to a struct is never considered.
 
-A function without annotations is not looked at, so a program can be verified
+A function without annotations is never looked at. You can verify a program
 one function at a time.
 
 ## What there is to say
@@ -6878,10 +6875,10 @@ one function at a time.
 | `Predicate N(a, b) ::= P` | anywhere | A name for a formula. |
 
 The paper's `.vgo` dialect also has a `while` keyword, a `skip` statement and
-functions declared inside functions. None of those is Go, and a litgo block
-has to be Go, so they are left out; `for cond {}`, an empty statement and a
-separate function say the same things. `Property` and contracts on interface
-methods are read but not checked, and say so.
+functions declared inside functions. None of those is Go, and a litgo block has
+to be Go, so they're left out. `for cond {}`, an empty statement and a separate
+function say the same things anyway. `Property` and contracts on interface
+methods are read but not checked, and litgo says so.
 
 ```go
 // Marker starts a comment that is a VeGo annotation.
@@ -6918,10 +6915,10 @@ type Summary struct {
 }
 ```
 
-An annotation is one `//@` comment. A formula that is too long for a line goes
-on in the next comment, under the rule Go uses for semicolons: a line that ends
-in something that cannot end a formula (an operator, an opening bracket) is not
-finished.
+An annotation is one `//@` comment. A formula too long for one line carries on
+in the next comment, under the same rule Go uses for semicolons: a line that
+ends in something that can't end a formula (an operator, an opening bracket)
+isn't finished.
 
 ```go
 // annot is one annotation: a //@ comment, with the lines that continue it.
@@ -6945,11 +6942,11 @@ func Annotated(text []byte) bool {
 }
 ```
 
-`Prove` is the door the rest of litgo comes in by. It takes what a document
-tangles to, in memory, and answers in the document's own lines, which is the
-source map's job as always. A position mentioned inside a message (the
-`return` a postcondition failed for, say) is translated too. A document's Go
-files are verified a directory at a time, because a contract in one file is
+`Prove` is the front door, where the rest of litgo comes in. It takes what a
+document tangles to, in memory, and answers in the document's own lines, which
+is the source map's job as always. Even a position mentioned inside a message
+(the `return` a postcondition failed for, say) gets translated. A document's Go
+files are verified one directory at a time, because a contract in one file is
 used by calls in another.
 
 ```go
@@ -7024,8 +7021,7 @@ func Prove(res *lit.Result) ([]lit.Diag, Summary) {
 
 `Verify` is the same thing without the Markdown, for one package of Go. A
 function counts as proved when verifying it reported no error. Warnings (an
-`Axiom`, a loop without a `Variant`) do not take a proof away, they qualify
-it.
+`Axiom`, a loop without a `Variant`) don't take a proof away. They qualify it.
 
 ```go
 // Verify checks every annotated function of one package.
@@ -7078,10 +7074,10 @@ func Verify(sources []Source) ([]Finding, Summary) {
 }
 ```
 
-The verifier is syntactic. It never runs the type checker, because the types
-it can reason about are few enough to read off the declarations: the integer
-types, `bool`, `[]int`, and structs of the package, of which it uses the
-integer and boolean fields.
+The verifier is purely syntactic. It never runs the type checker, because the
+types it can reason about are few enough to read straight off the
+declarations: the integer types, `bool`, `[]int`, and the package's own
+structs, of which it uses the integer and boolean fields.
 
 ```go
 type vkind int
@@ -7302,20 +7298,20 @@ func constInt(e ast.Expr) (int64, bool) {
 Where an annotation stands decides whose it is. `Requires` belongs to the
 function below it, and `Ensures` to the function above it, which is where VeGo
 puts it: a postcondition reads best after the code, the way a conclusion does.
-An `Ensures` written in the doc comment of a function, with its `Requires`, is
-accepted too. Annotations inside a body wait there until the walk through the
-body reaches them.
+An `Ensures` in a function's doc comment, next to its `Requires`, is accepted
+too. Annotations inside a body wait there until the walk through the body
+reaches them.
 
 gofmt has opinions about comments, and an annotation has to survive them,
-because code gets formatted on save whether anyone thinks about annotations or
-not. There are two. In a doc comment, gofmt puts a space after the slashes, so
-`//@ Requires` above a function comes back as `// @ Requires`. And it puts a
-blank line between a closing brace and a comment under it, so an `Ensures`
-comes loose from its function. Neither changes what the annotation means
-here: `// @` followed by a keyword is read as `//@`, and an `Ensures` looks
-upward past blank lines. (`lit.ProofComment`, which decides what is an
-annotation, is in [Finding the annotations](#finding-the-annotations), because
-the editor's highlighting asks the same question.)
+because code gets formatted on save whether anyone is thinking about
+annotations or not. gofmt does two things to them. In a doc comment it puts a
+space after the slashes, so `//@ Requires` above a function comes back as
+`// @ Requires`. And it puts a blank line between a closing brace and a comment
+under it, so an `Ensures` drifts loose from its function. Neither one changes
+the meaning here: `// @` followed by a keyword reads as `//@`, and an `Ensures`
+looks upward past blank lines. (`lit.ProofComment`, which decides what counts
+as an annotation, lives in [Finding the annotations](#finding-the-annotations),
+because the editor's highlighting asks the same question.)
 
 ```go
 // annotations reads a file's //@ comments, parses them, and hands each to the
@@ -7504,7 +7500,7 @@ func (v *verifier) parse(a *annot) {
 <!-- package: vego -->
 <!-- imports: fmt, sort, strconv, strings -->
 
-Formulas are written the way they are on a blackboard, in ASCII:
+Formulas are written the way you'd write them on a blackboard, in ASCII:
 
 | | |
 |:--|:--|
@@ -7520,7 +7516,7 @@ The length of a slice can also be written `|A|`, and Go's `&&`, `||` and `!`
 are read as `^`, `v` and `~`, for the fingers that type them anyway.
 
 One type serves for terms, for formulas, and later for the symbolic values of
-program variables, so that a Go expression and an annotation can meet in the
+program variables. That way a Go expression and an annotation can meet in the
 same formula.
 
 ```go
@@ -7659,9 +7655,9 @@ func (e *expr) String() string {
 }
 ```
 
-Everything that is done to a formula (giving names their values, unfolding a
-predicate, instantiating a quantifier) is a substitution, and the one thing a
-substitution must not do is touch a variable that a quantifier binds.
+Everything done to a formula (giving names their values, unfolding a
+predicate, instantiating a quantifier) is a substitution. And there's one thing
+a substitution must never do: touch a variable that a quantifier binds.
 
 ```go
 // rewrite rebuilds e bottom-up. f sees every variable that is not bound by a
@@ -7719,10 +7715,10 @@ type predicate struct {
 
 ### Reading a formula
 
-The letter `v` is *or* when it stands where an operator can stand, and a
-variable anywhere else, so a program can still have a variable called `v`. A
-name may have dots in it, which is how `s.Len` is one name, and primes after
-it.
+The letter `v` means *or* when it stands where an operator can stand, and it's
+a variable anywhere else, so a program can still have a variable called `v`. A
+name may contain dots, which is how `s.Len` is one name, and it may end in
+primes.
 
 ```go
 type lexeme struct {
@@ -7807,11 +7803,10 @@ func continues(text string) bool {
 }
 ```
 
-The parser is recursive descent, one function for each level of binding
-strength, loosest first: `<->`, then `->`, `v`, `^`, `~`, the comparisons, and
-the arithmetic. A syntax error is a panic that carries its column and is
-caught at the top, so that the error lands under the character that caused
-it.
+The parser is recursive descent, one function per level of binding strength,
+loosest first: `<->`, then `->`, `v`, `^`, `~`, the comparisons, and the
+arithmetic. A syntax error is a panic that carries its column and gets caught
+at the top, so the error lands right under the character that caused it.
 
 ```go
 type reader struct {
@@ -7972,9 +7967,9 @@ func (p *reader) neg() *expr {
 ```
 
 A chain of comparisons is the conjunction of its links. A comparison with a
-range of a slice on one side is a quantifier in disguise, and the parser takes
-the disguise off: `A[0:i) <= m` becomes `Forall k : 0 <= k < i -> A[k] <= m`,
-and `m in A[0:i)` becomes an `Exists`.
+range of a slice on one side is a quantifier in disguise, and the parser pulls
+off the mask: `A[0:i) <= m` becomes `Forall k : 0 <= k < i -> A[k] <= m`, and
+`m in A[0:i)` becomes an `Exists`.
 
 ```go
 var comparisons = map[string]bool{"=": true, "==": true, "<>": true, "!=": true, "<": true, "<=": true, ">": true, ">=": true}
@@ -8236,10 +8231,11 @@ func (p *reader) rangeEnd(v, lo *expr, open bool) *expr {
 }
 ```
 
-A quantifier's domain is folded into its body, as the hypothesis of a `Forall`
-and as a conjunct of an `Exists`, so that past this point a quantifier ranges
-over all integers and there is one kind of each. `Unique x : P(x)` says that
-some `x` makes `P` true and that anything that makes `P` true is that `x`.
+A quantifier's domain gets folded into its body, as the hypothesis of a
+`Forall` and as a conjunct of an `Exists`. Past this point every quantifier
+ranges over all the integers, and there's only one kind of each.
+`Unique x : P(x)` says some `x` makes `P` true, and anything that makes `P`
+true is that `x`.
 
 ```go
 // quantifier parses Forall x in D : body. The body reaches as far as it can.
@@ -8339,15 +8335,15 @@ func names(e *expr) []string {
 <!-- package: vego -->
 <!-- imports: fmt, go/ast, go/token, sort, strings -->
 
-The verifier executes a function symbolically. A parameter starts out as a
-symbol that stands for any value at all. An assignment does not change a
-value, it gives the variable a new one and keeps the old, which is what SSA
-form does with its subscripts, and it is also exactly what the primes of an
-annotation need: in a formula that mentions `x'`, the `x'` is the value now
-and the `x` is the one before.
+The verifier runs a function symbolically. A parameter starts out as a symbol
+that stands for any value at all. An assignment doesn't overwrite a value. It
+gives the variable a new one and keeps the old, which is what SSA form does
+with its subscripts. It's also exactly what the primes of an annotation need:
+in a formula that mentions `x'`, the `x'` is the value now and the `x` is the
+one before.
 
-A path through the function is a `state`: what every variable holds, and the
-formulas known to be true on the way here, which are the hypotheses of
+A path through the function is a `state`: what every variable holds, plus the
+formulas known to be true on the way here. Those formulas are the hypotheses of
 whatever has to be proved next.
 
 ```go
@@ -8393,8 +8389,7 @@ func (s *state) clone() *state {
 ```
 
 Blocks have scopes, and a variable declared in an inner block can hide one
-outside. Each open block remembers what it hid, and puts it back when it
-closes.
+outside. Each open block remembers what it hid and puts it back when it closes.
 
 ```go
 func (s *state) push() { s.scopes = append(s.scopes, map[string]*binding{}) }
@@ -8443,10 +8438,10 @@ func (s *state) declare(name string, b *binding) {
 }
 ```
 
-An `if` splits a path in two, and both go on. So a statement does not leave one
-state behind but several, sorted by how they left: by falling out of the
-bottom, by `break`, or by `continue`. A `return` leaves none, because
-everything that has to hold at a return is proved right there.
+An `if` splits a path in two, and both halves carry on. So a statement doesn't
+leave one state behind but several, sorted by how they left: out the bottom, by
+`break`, or by `continue`. A `return` leaves none, because everything that has
+to hold at a return is proved right there on the spot.
 
 ```go
 // outcomes are the states a statement leaves behind, by how it was left.
@@ -8489,7 +8484,7 @@ const maxPaths = 400
 
 Verifying a function starts with its parameters as unknowns and its
 precondition as the first hypothesis. Go gives named results their zero values,
-so the proof knows them too.
+so the proof knows those too.
 
 ```go
 func (v *verifier) verify(f *fn) {
@@ -8611,11 +8606,10 @@ func (r *run) fresh(name string, k vkind) *expr {
 
 ### Obligations
 
-Everything the verifier proves goes through `check`: the hypotheses of the path
-on one side, a goal on the other. A failure is reported at the annotation that
-was not proved, and mentions the place in the code it was not proved for. An
-obligation that comes from the code itself, like an index, is reported at the
-code.
+Everything the verifier proves goes through `check`: the path's hypotheses on
+one side, a goal on the other. A failure is reported at the annotation that
+wasn't proved, and names the place in the code it failed for. An obligation
+that comes from the code itself, like an index, is reported at the code.
 
 ```go
 // check is one proof obligation. It reports at the annotation, or at a
@@ -8650,11 +8644,12 @@ func (r *run) feasible(st *state) bool { return !proves(st.hyps, eFalse) }
 ### What a formula means at a point in the program
 
 A formula is written in the program's names, and what it says depends on where
-it stands. Here the names get their values. With primes, the most-primed
-mention of a variable is its value now, and each prime fewer is one assignment
-earlier, so after `x = x + 1` the formula `x' = x + 1` says what the assignment
-did. A postcondition is different: there a parameter without a prime is the
-value the caller passed, whatever the body did to its copy.
+it stands. This is where the names get their values. With primes, the
+most-primed mention of a variable is its value now, and each prime fewer is one
+assignment earlier. So after `x = x + 1`, the formula `x' = x + 1` says exactly
+what the assignment did. A postcondition is different. There, a parameter
+without a prime is the value the caller passed in, whatever the body did to
+its copy.
 
 ```go
 // formula gives an annotation's formula its meaning in a state: predicates
@@ -8753,11 +8748,11 @@ func (r *run) bad(a *annot, format string, args ...any) {
 }
 ```
 
-A predicate is unfolded into its body. So is a call of a Go function whose
-whole body is `return` and one expression, which makes small Go functions
-usable as vocabulary: a contract can say `s.src(c) = col` and mean it about
-the real `src`. A function with more to it than that cannot be used this way,
-because a formula needs a value and such a function might not even return.
+A predicate gets unfolded into its body. So does a call of a Go function whose
+whole body is `return` plus one expression, which turns small Go functions into
+vocabulary: a contract can say `s.src(c) = col` and mean it about the real
+`src`. A function with more going on can't be used this way, because a formula
+needs a value and such a function might never even return.
 
 ```go
 // unfold replaces P(x, y) by what it stands for: the body of a predicate, or
@@ -8879,9 +8874,9 @@ func (r *run) oneLine(f *fn) *expr {
 ### Go expressions
 
 A Go expression is read in two steps. `pure` translates the syntax into a term
-over the program's names, and remembers for every part where it came from.
-`eval` then gives the names their values and, on the way, states what has to be
-true for the expression to be evaluated at all.
+over the program's names, remembering where every part came from. `eval` then
+gives the names their values and, along the way, states what has to be true for
+the expression to be evaluated at all.
 
 ```go
 // pure reads a Go expression as a term over the names it mentions. It
@@ -9005,10 +9000,10 @@ func (r *run) pure(e ast.Expr, kind func(string) vkind) *expr {
 }
 ```
 
-These are the safety obligations: an index is within its slice, a divisor is
-not zero, a callee's precondition holds. Go evaluates `&&` and `||` from the
-left and stops early, so the right side of `i < len(A) && A[i] > 0` is only
-obliged to be safe when the left side is true. The guards carry that.
+These are the safety obligations: an index stays inside its slice, a divisor
+isn't zero, a callee's precondition holds. Go evaluates `&&` and `||` left to
+right and stops early, so the right side of `i < len(A) && A[i] > 0` only has
+to be safe when the left side is true. The guards carry that.
 
 ```go
 // value evaluates a Go expression in a state, and states what has to be
@@ -9133,12 +9128,12 @@ func (r *run) callee(st *state, c *ast.CallExpr) (*fn, string) {
 }
 ```
 
-A call is where verification is modular. The caller does not look inside the
+A call is where verification becomes modular. The caller never looks inside the
 callee. It proves the callee's `Requires`, gets fresh unknowns for the results,
-and learns the callee's `Ensures` about them and nothing else. That is also
-what makes recursion work: inside `Triangle`, the call `Triangle(n-1)` is
-known by the very contract being proved, which is the induction hypothesis,
-and the `Measure` is what makes the induction well-founded.
+and learns the callee's `Ensures` about them, and nothing else. That's also
+what makes recursion work. Inside `Triangle`, the call `Triangle(n-1)` is known
+by the very contract being proved. That's the induction hypothesis, and the
+`Measure` is what keeps the induction well-founded (it can't go down forever).
 
 ```go
 // call uses a function by its contract: the precondition is an obligation,
@@ -9291,9 +9286,9 @@ func (r *run) descends(st *state, e *expr, args []*expr, guards []*expr, at ast.
 
 ### Statements
 
-A block is its statements, with the annotations that stand between them taken
-in order. `Invariant` and `Variant` are the exception: they are collected by
-the loop they belong to.
+A block is its statements, with the annotations between them taken in order.
+`Invariant` and `Variant` are the exception: the loop they belong to collects
+them.
 
 ```go
 // block runs the statements of a block, with the annotations between them.
@@ -9503,8 +9498,8 @@ func (r *run) effect(st *state, s *ast.ExprStmt) {
 ```
 
 Assignments go to variables only. `A[i] = x` and `p.f = x` are refused, and the
-reason is aliasing: another slice may share the array, another pointer may
-reach the struct, and a proof that did not see them change would be a proof of
+reason is aliasing. Another slice may share the array, another pointer may reach
+the struct, and a proof that didn't see them change would be a proof of
 something false.
 
 ```go
@@ -9597,10 +9592,10 @@ func (r *run) keep(st *state, at ast.Node) {
 }
 ```
 
-A branch that cannot be taken is dropped, by asking the prover whether the
+A branch that can't be taken gets dropped, by asking the prover whether the
 hypotheses have become contradictory. Without that, the obligations of
-unreachable code would be "proved" from the contradiction, which is harmless,
-but paths multiply and these are the cheap ones to lose.
+unreachable code would be "proved" from the contradiction. Harmless, but paths
+multiply, and these are the cheap ones to lose.
 
 ```go
 func (r *run) branch(st *state, s *ast.IfStmt) outcomes {
@@ -9686,23 +9681,23 @@ func (r *run) leave(st *state, at token.Pos) {
 
 ### Loops
 
-A loop cannot be walked, because nobody knows how often it goes round. The
-invariant is what cuts it:
+A loop can't be walked, because nobody knows how many times it goes round. The
+invariant is what cuts it down to size:
 
 1. The invariant is proved for the state that reaches the loop.
-2. Every variable the loop assigns to is forgotten: it gets a fresh symbol, and
-   all that is assumed about the new symbols is the invariant (and whatever the
-   enclosing blocks promised to preserve). This state stands for the start of
-   *any* iteration.
+2. Every variable the loop assigns to is forgotten. It gets a fresh symbol, and
+   all that is assumed about the new symbols is the invariant (plus whatever
+   the enclosing blocks promised to preserve). This state stands for the start
+   of *any* iteration.
 3. From there, with the condition true, the body is walked once. At its end the
-   invariant is proved again, and the variant is proved smaller than it was and
-   to have been non-negative.
-4. From the same state, with the condition false, the walk goes on after the
+   invariant is proved again, and the variant is proved to have been
+   non-negative and to have gotten smaller.
+4. From the same state, with the condition false, the walk carries on after the
    loop.
 
-A `break` leaves with whatever is known at that point, which need not include
-the invariant. A `range` loop is a counted loop whose counter cannot be
-tampered with, so it needs no variant to be known to end.
+A `break` leaves with whatever is known at that point, which may not include the
+invariant. A `range` loop is a counted loop whose counter can't be tampered
+with, so it needs no variant to be known to end.
 
 ```go
 // loop is a for statement, or a range statement read as one.
@@ -9935,26 +9930,54 @@ func (r *run) assigned(l *loop) []string {
 <!-- package: vego -->
 <!-- imports: fmt, sort, strings -->
 
-An obligation is a list of hypotheses and a goal. The prover looks for a way
-the hypotheses could all be true and the goal false; if there is none, the
-goal follows. That takes four steps, each sound by itself:
+An obligation is a list of hypotheses $H$ and a goal $G$. A *model* is a choice
+of values for every variable that makes a formula true, and $H \models G$ ($H$
+entails $G$) when every model of $H$ is a model of $G$. The prover checks this
+by refutation. It hunts for a model of $F = H \land \lnot G$, a way for the
+hypotheses to hold and the goal to fail. If there is none, the goal follows. It
+gets there in four steps. Each one turns $F$ into some $F'$ and keeps one
+promise: if $F$ has a model, so does $F'$. A step may drop information, which
+only makes $F'$ harder to refute, but it may never add a constraint that some
+model of $F$ breaks.
 
-1. Negations are pushed inward, which turns the negated goal's `Forall` into
-   an `Exists`, and every `Exists` that is not under a `Forall` gets a fresh
-   constant as its witness.
-2. Every `Forall` is replaced by a handful of its instances: at the terms
-   that index a slice somewhere in the obligation, and at the witnesses. A
-   universal fact is only ever weakened by this. If that is not enough, it is
-   done once more, at the terms the instances brought with them, which is
-   what a proof about `A[Parent(k)]` needs and what most proofs are better
-   off without.
-3. What is left has no quantifiers. Its atoms are turned into linear
-   constraints over polynomials.
-4. A search splits on the disjunctions, and Fourier-Motzkin elimination closes
-   a branch when its constraints are contradictory.
+1. Negations are pushed inward using De Morgan and 
+   $\lnot\forall x.P \equiv \exists x.\lnot P$, so the negated 
+   goal's `Forall` becomes an `Exists`.
+   These are equivalences, so the models are unchanged. Every `Exists` not
+   under a `Forall` then gets a fresh constant as its witness: $\exists x.P(x)$
+   becomes $P(c)$ (Skolemization). A model of the first gives one of the second
+   by letting $c$ be the $x$ it has. The constant must be fresh so nothing else
+   constrains it. Under a `Forall`, the witness would depend on the bound
+   variable and would have to be a function.
+2. Every `Forall` is replaced by a handful of its instances, at the terms that
+   index a slice somewhere in the obligation and at the witnesses: $\forall x.P(x)$ 
+   becomes $P(t_1) \land \dots \land P(t_n)$. Each instance follows from
+   the universal, so this only ever weakens it. The choice of terms decides
+   whether a proof is *found*, never whether it's *right*. If that isn't enough,
+   it's done once more, at the terms the instances brought along, which is what
+   a proof about `A[Parent(k)]` needs and what most proofs are better off
+   without.
+3. What's left has no quantifiers. Its atoms become linear constraints over
+   polynomials. A product like `x*y` becomes an unknown of its own, its link to
+   `x` and `y` forgotten (weakening again: give it the product's value). Over
+   the integers `p < 0` is exactly `p + 1 <= 0`, so there are no strict
+   inequalities.
+4. A search splits on the disjunctions. $A \lor B$ has a model only if one side
+   does, so every branch has to close. Fourier-Motzkin elimination closes a
+   branch by pairing each lower bound $l \le x$ with each upper bound $x \le u$
+   to derive $l \le u$. Every derived constraint is a nonnegative combination of
+   earlier ones, so it holds wherever they do, and reaching $1 \le 0$ means the
+   branch has no model. No rational solution means no integer one either, and
+   the gcd rounding below only removes solutions that aren't integers.
 
-Arithmetic is normalised into polynomials. That is what makes `(q+1)*d + (r-d)`
-and `q*d + r` the same thing without any search: they are the same
+The promise chains. If $F$ had a model, some branch at the end would too, so
+when every branch closes, the goal holds. It's also why the shortcuts are safe.
+Too few instances, a forgotten product or a budget that runs out can leave a
+branch open, which is only "not proved". None of them can close a branch that
+has a model.
+
+Arithmetic is normalised into polynomials. That's how `(q+1)*d + (r-d)` and
+`q*d + r` turn out to be the same thing without any search. They're the same
 polynomial.
 
 ```go
@@ -10228,9 +10251,9 @@ func nnf(e *expr, pos bool) *expr {
 }
 ```
 
-A witness may only be named once nothing universal is above it. For
+A witness can only be named once nothing universal sits above it. In
 `Forall i : Exists j : P(i, j)` the `j` depends on the `i`, so the `Exists`
-waits until the `Forall` has been instantiated and gets a new witness per
+waits until the `Forall` has been instantiated, then gets a new witness per
 instance.
 
 ```go
@@ -10355,11 +10378,11 @@ func (pr *prover) ground(e *expr) *node {
 }
 ```
 
-Whatever is not addition or multiplication by a constant becomes an atom, an
-unknown of its own, and the facts that make it more than an unknown are added
-as axioms the first time it appears: a length is not negative, a quotient and
+Anything that isn't addition or multiplication by a constant becomes an atom,
+an unknown of its own. The facts that make it more than an unknown get added as
+axioms the first time it shows up: a length is never negative, a quotient and
 its remainder add up, equal indices select equal elements, and a product of
-non-negative numbers is not negative.
+non-negative numbers is non-negative.
 
 ```go
 // poly normalises an integer term. Whatever is not arithmetic becomes an
@@ -10482,10 +10505,10 @@ func (pr *prover) congruence() {
 }
 ```
 
-The search keeps the constraints of the branch it is in and the disjunctions
-it has not decided. Before it splits, it drops every disjunct that already
-contradicts the branch; a disjunction with one disjunct left is a fact and one
-with none closes the branch, which is unit propagation, and it is what keeps
+The search keeps the constraints of the branch it's in and the disjunctions it
+hasn't decided yet. Before it splits, it drops every disjunct that already
+contradicts the branch. A disjunction with one disjunct left is a fact, and one
+with none left closes the branch. That's unit propagation, and it's what stops
 the instances of a quantifier from multiplying the work.
 
 ```go
@@ -10587,15 +10610,15 @@ type poly2 struct {
 
 ### Fourier-Motzkin elimination
 
-To decide whether linear inequalities can hold together, pick a variable,
-pair every constraint that bounds it from above with every one that bounds it
-from below, and keep the sums, in which the variable cancels. Repeat until no
-variables are left; the constraints are contradictory exactly when some
-$c \le 0$ with a positive $c$ remains. That is complete over the rationals.
-Over the integers it is only sound, and two small things make it sharper:
-equalities are solved and substituted first, and every constraint is divided
-by the gcd of its coefficients with the constant rounded, so that
-$2x \le 1$ becomes $x \le 0$.
+Okay, how do you decide whether a pile of linear inequalities can all hold at
+once? Pick a variable. Pair every constraint that bounds it from above with
+every one that bounds it from below, and keep the sums, in which the variable
+cancels out. Repeat until no variables are left. The constraints are
+contradictory exactly when some $c \le 0$ with a positive $c$ remains. That's
+complete over the rationals. Over the integers it's only sound, and two small
+tricks make it sharper: equalities are solved and substituted first, and every
+constraint is divided by the gcd of its coefficients with the constant rounded,
+so $2x \le 1$ becomes $x \le 0$.
 
 ```go
 // unsat decides whether linear constraints have no rational solution, with
@@ -10933,11 +10956,11 @@ func eliminate(p, e poly, v string) poly {
 <!-- package: vego -->
 <!-- imports: go/format, os, strings, testing, github.com/tlehman/litgo/internal/lit -->
 
-A verifier has two ways to be wrong, and they are not equally bad. If it fails
+A verifier can be wrong in two ways, and they are not equally bad. If it fails
 to prove something true, somebody strengthens an invariant. If it proves
-something false, it is worse than useless. So every program here that is
-proved is also broken, one small change at a time, and each broken version
-has to be rejected for the right reason.
+something false, it's worse than useless. So every program here that is proved
+also gets broken, one small change at a time, and each broken version has to be
+rejected for the right reason.
 
 ```go
 func verifySrc(t *testing.T, src string) ([]Finding, Summary) {
@@ -11282,10 +11305,9 @@ func (s Seg) src(col int) (c int) { return s.SrcCol + col - s.OutCol }
 <!-- package: main -->
 <!-- imports: encoding/json, flag, fmt, go/format, io, os, path/filepath, sort, strings, github.com/tlehman/litgo/internal/check, github.com/tlehman/litgo/internal/lit, github.com/tlehman/litgo/internal/lsp, github.com/tlehman/litgo/internal/vego, github.com/tlehman/litgo/internal/weave -->
 
-Half of the commands are for people. The other half are the editor protocol,
-where the document arrives on standard input and JSON goes out. The document
-comes in on standard input because the buffer being edited is rarely the same
-as the file on disk.
+Half of the commands are for people. The other half are the editor protocol:
+the document goes in on standard input, and JSON comes out. Why standard input?
+Because the buffer you are editing is rarely the same as the file on disk.
 
 ```go
 const usage = `litgo — literate Go
@@ -11546,12 +11568,12 @@ func cmdCheck(args []string) int {
 }
 ```
 
-`prove` is the part of `check` that is about the `//@` annotations, with a
-count at the end, because after a proof the interesting news is good news and
-silence would not tell it. It checks the structure and the syntax first, since
-a proof about a program that does not parse is a proof about nothing. It does
-not wait for the type checker, though: the verifier reads types off the
-declarations, and a proof is worth having while an import is still missing.
+`prove` is the slice of `check` that cares about the `//@` annotations, plus a
+count at the end. After a proof the news is usually good, and silence can't
+tell you that. It checks structure and syntax first, because a proof about a
+program that doesn't parse is a proof about nothing. It doesn't wait for the
+type checker, though. The verifier reads types straight off the declarations,
+and a proof is worth having even while an import is still missing.
 
 ```go
 func cmdProve(args []string) int {
@@ -11610,8 +11632,8 @@ func cmdProve(args []string) int {
 }
 ```
 
-`cat` prints a document the way the editor shows it, so it is the quickest way
-to see what the renderers do.
+`cat` prints a document the way the editor shows it. It's the quickest way to
+see what the renderers do.
 
 ```go
 // cmdCat prints the document the way the editor shows it: math as Unicode,
@@ -11659,9 +11681,9 @@ func cmdCat(args []string) int {
 }
 ```
 
-`go/format` accepts fragments (a list of statements as well as a whole file),
-so most blocks can be formatted right where they are. A block that only parses
-after its chunks are spliced in gets left alone.
+`go/format` accepts fragments (a list of statements, not just a whole file),
+so most blocks can be formatted right where they sit. A block that only parses
+once its chunks are spliced in gets left alone.
 
 ```go
 func cmdFmt(args []string) int {
@@ -11774,10 +11796,10 @@ func cmdRename(args []string) int {
 
 `litgo run` is the reason everything above exists. It tangles, proves,
 compiles and runs the program, and reports every position in terms of the
-document. The stages are in order of cost, and each one stops the run if it
-fails: a chunk that does not exist costs microseconds to find, a broken
-invariant milliseconds, a type error a compiler, and a wrong answer a whole
-execution and somebody paying attention.
+document. The stages go in order of cost, and any one of them stops the run if
+it fails. A missing chunk costs microseconds to find. A broken invariant costs
+milliseconds. A type error costs a compiler. A wrong answer costs a whole
+execution, plus somebody paying attention.
 
 ```mermaid
 sequenceDiagram
@@ -11796,16 +11818,16 @@ sequenceDiagram
     L-->>E: output, positions translated
 ```
 
-Progress goes to a person as text, or to an editor as one JSON event per line.
-The events are `tangle`, `prove`, `diagnostic`, `build`, `output` and `exit`.
-A failed proof is a `diagnostic` like a compile error, told apart by its
-`source`, which is `vego`. An editor can use that to show the two differently,
+Progress goes to a person as text, or to an editor as one JSON event per line:
+`tangle`, `prove`, `diagnostic`, `build`, `output` and `exit`. A failed proof
+is a `diagnostic`, just like a compile error. The only difference is its
+`source`, which is `vego`. An editor can use that to paint the two differently,
 and the Neovim plugin does.
 
-The reporter has no lock, so only one goroutine is allowed to use it. That is
-the goroutine that runs `runFile`. When a program's output has to be read from
-two pipes at once, the goroutines that read the pipes send their lines to that
-one goroutine over a channel, and it does all of the reporting.
+The reporter has no lock, so only one goroutine gets to use it: the one
+running `runFile`. When a program's output has to be read from two pipes at
+once, the pipe readers send their lines over a channel to that one goroutine,
+and it does all the reporting.
 
 ```go
 // reporter carries the run's progress to a person (plain text) or to an
@@ -11872,8 +11894,8 @@ func relPath(p string) string {
 ## Translating positions
 
 Anything that looks like `file.go:12:5` and names a file litgo tangled gets
-rewritten, wherever it shows up. That can be in a compiler error, in the middle
-of an error message that mentions a second position, or in a stack trace.
+rewritten, wherever it shows up: in a compiler error, halfway through a message
+that mentions a second position, or deep in a stack trace.
 
 ```go
 // remapper rewrites positions in tangled files back to the literate source.
@@ -12068,8 +12090,8 @@ if doc.Run != "" {
 ```
 
 Every file that gets written is registered with the remapper. If the document's
-structure has problems, the run stops here, because there is no point compiling
-half a program.
+structure is broken, the run stops here. There's no point compiling half a
+program.
 
 <!-- chunk: tangle and write every document -->
 ```go
@@ -12111,14 +12133,14 @@ if !ok {
 }
 ```
 
-A document with `//@` annotations is proved before it is compiled. The order
-is deliberate. A proof needs no compiler and takes milliseconds, and a program
-whose contract does not hold is not a program anyone asked to see run: the
-output of a wrong `Divide` is a distraction from the line that says its
-invariant is not maintained. So a failed proof stops the run, the same way a
-compile error does, and is reported the same way, as a diagnostic at a line of
-the Markdown with `vego` as its source. `--no-prove` is for the times when
-watching it run is how you find out what the invariant should have been.
+A document with `//@` annotations gets proved before it gets compiled, on
+purpose. A proof needs no compiler and takes milliseconds. And a program whose
+contract doesn't hold is not a program anyone asked to watch run. The output of
+a wrong `Divide` only distracts from the line that says its invariant is not
+maintained. So a failed proof stops the run, just like a compile error, and is
+reported the same way: a diagnostic on a line of the Markdown, with `vego` as
+its source. `--no-prove` is for the times when watching it run is how you find
+out what the invariant should have been.
 
 <!-- chunk: prove what is annotated -->
 ```go
@@ -12165,7 +12187,7 @@ if def.Lang != "go" || main == nil {
 ```
 
 Building and running are separate steps. That way litgo can tell a compile
-error apart from a program that exits non-zero, and it can time both steps.
+error from a program that exits non-zero, and it can time each one.
 
 <!-- chunk: compile the default file -->
 ```go
@@ -12191,8 +12213,8 @@ r.emit("build", map[string]any{"ok": true, "ms": ms})
 r.status("built in %d ms", ms)
 ```
 
-The compiler stops after ten errors unless you tell it not to, and in a tight
-loop it is better to see all of them.
+The compiler gives up after ten errors unless you tell it not to. In a tight
+loop you want to see all of them.
 
 <!-- chunk: arguments to go build -->
 ```go
@@ -12216,17 +12238,17 @@ if def.Package != "main" && def.Package != "" {
 
 ## Running
 
-Output gets streamed line by line, and positions are translated on the way
-through. A panic becomes a diagnostic on the innermost stack frame that is in
-the document. A failing test does too, when the document's own command runs
+Output streams line by line, and positions get translated on the way through.
+A panic becomes a diagnostic on the innermost stack frame that lives in the
+document. So does a failing test, when the document's own command runs
 `go test`.
 
 The program's stdout and stderr both have to be read while it runs, so each
-pipe gets a goroutine. Those goroutines don't report anything themselves. They
-send every line down one channel, and the loop in `execute` receives the lines
-and does the reporting. The same loop waits for the timeout, so the reporter,
-the panic bookkeeping and the `timedOut` flag all belong to one goroutine and
-none of them needs a lock.
+pipe gets a goroutine. Those goroutines report nothing themselves. They send
+every line down one channel, and the loop in `execute` receives them and does
+the reporting. The same loop watches the timeout. So the reporter, the panic
+bookkeeping and the `timedOut` flag all belong to one goroutine, and none of
+them needs a lock.
 
 ```mermaid
 flowchart LR
@@ -12341,8 +12363,8 @@ func execute(r *reporter, m *remapper, cmd *exec.Cmd, dir string, timeout time.D
 }
 ```
 
-The program runs in its own process group. Stopping litgo stops the program and
-anything it started, and the timeout does the same.
+The program runs in its own process group. Stop litgo and you stop the program
+and everything it started. The timeout does the same.
 
 <!-- file: proc_unix.go -->
 
@@ -12412,16 +12434,16 @@ func killOnSignal(cmd *exec.Cmd) func() { return func() {} }
 
 # Errors as you type
 
-`litgo run` finds every error, but only when you ask, and only after it writes
-files and starts a compiler. Most errors can be found sooner than that. The Go
-type checker is in the standard library. If you give it the tangled files *in
-memory*, it reports what the compiler would report (an undefined name, a wrong
-argument, an unused variable, an unused import) in a few milliseconds, and the
+`litgo run` finds every error, but only when you ask, and only after it has
+written files and started a compiler. Most errors can be caught much sooner.
+The Go type checker lives in the standard library. Hand it the tangled files
+*in memory* and it reports what the compiler would (an undefined name, a wrong
+argument, an unused variable, an unused import) in a few milliseconds. The
 source map puts each report on the right line of the Markdown. A language
-server runs that check after every change, so the errors show up under the code
-that caused them before you have even thought about running anything. The
+server runs that check after every change, so errors show up under the code
+that caused them before you've even thought about running anything. The
 verifier works the same way, on the same files in memory, so a document with
-`//@` annotations is proved after every change too.
+`//@` annotations gets proved after every change too.
 
 ```mermaid
 sequenceDiagram
@@ -12443,12 +12465,12 @@ sequenceDiagram
 <!-- package: check -->
 <!-- imports: bytes, fmt, go/ast, go/build, go/importer, go/parser, go/token, go/types, io, os, os/exec, path/filepath, sort, strings, github.com/tlehman/litgo/internal/lit -->
 
-A check works on packages. A package's files are the document's outputs in one
+A check works on packages, and a package is the document's outputs in one
 directory. When the document writes a module or has its own `run:` command, the
-other Go files already in that directory are included too. A document that is a
-single program gets checked by itself, the same way `litgo run` compiles it by
-itself. This matters because a directory of examples is full of `main`
-functions that can't be in the same package.
+other Go files already sitting in that directory come along too. A document that
+is a single program gets checked alone, the same way `litgo run` compiles it
+alone. Who cares? Anyone with a directory of examples, which is full of `main`
+functions that can't share a package.
 
 ```go
 // pkg is one package about to be checked.
@@ -12507,7 +12529,7 @@ func Types(res *lit.Result, cache *Cache) []lit.Diag {
 
 Build constraints matter here. litgo itself has two files that define the same
 functions for different operating systems. `go/build` decides which files
-belong, and it gets the in-memory content through its `OpenFile` hook.
+belong, and it reads the in-memory content through its `OpenFile` hook.
 
 ```go
 // parse sorts the files into packages. It fails if an output does not parse.
@@ -12568,8 +12590,8 @@ func (c *checker) parse() bool {
 }
 ```
 
-If a hand-written file doesn't parse, that is its author's problem and not this
-document's, so the file gets left out.
+If a hand-written file doesn't parse, that's its author's problem, not this
+document's. The file gets left out.
 
 <!-- chunk: add the files that are already in those directories -->
 ```go
@@ -12585,11 +12607,11 @@ for dir := range dirs {
 }
 ```
 
-The packages a document writes can import each other. For example, litgo's
-`main` imports its `internal/lit`. Those imports have to resolve to the version
-in the buffer and not to whatever was last tangled, so each package needs its
-import path, which is the module path plus the directory. The `go.mod` can be
-one of the outputs too.
+The packages a document writes can import each other. litgo's `main`, for
+example, imports its `internal/lit`. Those imports have to resolve to the
+version in the buffer, not to whatever was tangled last, so each package needs
+its import path (the module path plus the directory). The `go.mod` can be one of
+the outputs too.
 
 ```go
 // locate works out the import path of every package.
@@ -12632,12 +12654,12 @@ func (c *checker) locate() {
 ```
 
 Everything else gets imported the way `go vet` does it, from the export data
-the compiler left in the build cache. `go list -export` finds that data, and
-compiles first if it has to. This is exact, and it is fast. Reading the export
-data of `fmt` takes a fraction of the time it would take to type-check its
-source. One `go list` call covers all the imports of a check. The standard
-library gets remembered for the life of the process, because it doesn't change
-while an editor is running.
+the compiler left in the build cache (a compact summary of a compiled package's
+types). `go list -export` finds that data, compiling first if it has to. It's
+exact, and it's fast. Reading the export data of `fmt` takes a fraction of the
+time it would take to type-check its source. One `go list` call covers all the
+imports of a check. The standard library is remembered for the life of the
+process, because it doesn't change while an editor is running.
 
 ```go
 // resolve finds the export data of every package that is imported but not
@@ -12698,8 +12720,8 @@ func (c *checker) lookup(path string) (io.ReadCloser, error) {
 }
 ```
 
-The checker acts as its own importer. A package from this document gets checked
-on demand, once, without its tests. Anything else comes from the export data.
+The checker is its own importer. A package from this document gets checked on
+demand, once, without its tests. Anything else comes from the export data.
 
 ```go
 // Import implements types.Importer.
@@ -12736,7 +12758,7 @@ func (c *checker) check(p *pkg, root bool) (*types.Package, error) {
 }
 ```
 
-If a chunk is used twice, an error in it gets reported once, not twice.
+A chunk used twice with an error in it gets reported once, not twice.
 
 ```go
 func (c *checker) report(err error) {
@@ -12763,9 +12785,9 @@ func (c *checker) report(err error) {
 <!-- package: check -->
 <!-- imports: os, path/filepath, strings, testing, github.com/tlehman/litgo/internal/lit -->
 
-The test document writes a small module with a library, a program that uses it,
-and a test. None of it exists on disk, and each error is in a different kind of
-place.
+The test document writes a small module: a library, a program that uses it,
+and a test. None of it exists on disk, and each error hides in a different kind
+of place.
 
 <!-- verbatim -->
 ```go
@@ -12827,8 +12849,8 @@ func TestSingleProgramStandsAlone(t *testing.T) {
 <!-- imports: bufio, encoding/json, fmt, io, net/url, strconv, strings, time, github.com/tlehman/litgo/internal/check, github.com/tlehman/litgo/internal/lit, github.com/tlehman/litgo/internal/vego -->
 
 The Language Server Protocol is JSON-RPC over standard input and output, with a
-`Content-Length` header in front of each message. The part litgo needs for
-publishing diagnostics is small enough to write out here.
+`Content-Length` header in front of each message. The part litgo needs to
+publish diagnostics is small enough to write out right here.
 
 ```go
 type message struct {
@@ -12876,13 +12898,13 @@ func frame(m *message) []byte {
 }
 ```
 
-The server has no locks. One goroutine, the loop in `Serve`, owns all of the
-server's state: the open documents, the overlays, and the bookkeeping for
-gopls. Every other goroutine does one job that is slow or that blocks, and
-talks to the loop over a channel. One goroutine reads messages from the editor
-and one writes messages to the editor. Each document that changed has a timer
-that tells the loop when the typing has paused. At most one goroutine runs the
-type checker. Since only the loop touches the state, nothing needs a mutex.
+The server has no locks. One goroutine, the loop in `Serve`, owns all of its
+state: the open documents, the overlays, and the bookkeeping for gopls. Every
+other goroutine does one slow or blocking job and talks to the loop over a
+channel. One reads messages from the editor. One writes messages to the editor.
+Each changed document has a timer that tells the loop when the typing has
+paused. At most one goroutine runs the type checker. Only the loop touches the
+state, so nothing needs a mutex.
 
 ```mermaid
 flowchart LR
@@ -12892,11 +12914,11 @@ flowchart LR
     loop --> writer[write to the editor]
 ```
 
-A pipe gets written by one goroutine that owns it. Messages are framed by
-whoever sends them, so the writer never sees a value that someone else might
-still change. The channel has a buffer, so the loop can keep going while a
-reader on the other end of the pipe is slow. Closing the channel says there is
-nothing more to write, and `done` closes after the last message has gone out.
+A pipe is written by the one goroutine that owns it. Whoever sends a message
+frames it first, so the writer never holds a value someone else might still
+change. The channel has a buffer, so the loop keeps going even when the reader
+on the far end of the pipe is slow. Closing the channel means there's nothing
+more to write, and `done` closes once the last message is out.
 
 ```go
 // writer starts the goroutine that writes to a pipe.
@@ -12915,8 +12937,8 @@ func (s *server) write(m *message) { s.out <- frame(m) }
 ```
 
 The server keeps the text of every open document, and the whole text arrives
-with each change. A change starts a short timer instead of an analysis, so a
-burst of typing costs one analysis instead of one per keystroke.
+with each change. A change starts a short timer, not an analysis, so a burst of
+typing costs one analysis instead of one per keystroke.
 
 ```go
 type document struct {
@@ -13012,7 +13034,7 @@ func Serve(in io.Reader, out io.Writer, gopls string) error {
 ```
 
 Every goroutine that sends to the loop also watches `quit`, so none of them is
-left waiting for a loop that has gone away.
+left waiting forever on a loop that has gone away.
 
 ```go
 func (s *server) handle(m *message) {
@@ -13067,10 +13089,10 @@ func (s *server) handle(m *message) {
 ```
 
 The protocol counts columns in UTF-16 code units unless both sides agree on
-something else. litgo counts bytes and so does Neovim, which offers `utf-8`.
-For a client that doesn't offer it, litgo converts columns on the way out.
-Documents are synchronised whole (`change: 1`), because they are small and
-litgo parses the whole document anyway.
+something else. (Yes, UTF-16. It's a JavaScript thing.) litgo counts bytes, and
+so does Neovim, which offers `utf-8`. For a client that doesn't, litgo converts
+columns on the way out. Documents are synchronised whole (`change: 1`), because
+they're small and litgo parses the whole thing anyway.
 
 <!-- chunk: agree on how columns are counted, and say what the server does -->
 ```go
@@ -13132,24 +13154,24 @@ func (s *server) current(uri string) (string, int) {
 Diagnostics go out in two rounds. Problems with the document's structure and
 with Go's syntax take microseconds to find, so the loop finds them itself and
 publishes them right away. If there are none, the document needs a type check.
-That can take a while, because the first one in a session has to wait for
-`go list`, so it runs in a goroutine of its own and the loop stays free to
-answer the editor.
+That can take a while (the first one in a session has to wait for `go list`),
+so it runs in a goroutine of its own and the loop stays free to answer the
+editor.
 
-Only one type check runs at a time, because the cache is not locked, and
-because a machine has better things to do than check five versions of one
-document at once. While the checker is busy, the loop keeps the newest job for
-each document in `waiting`, and a newer job replaces an older one. When the
-checker sends its job back, the loop publishes the findings unless the document
-has changed in the meantime, and then starts the next job.
+Only one type check runs at a time. The cache isn't locked, and a machine has
+better things to do than check five versions of one document at once. While the
+checker is busy, the loop keeps the newest job for each document in `waiting`,
+and a newer job replaces an older one. When the checker hands its job back, the
+loop publishes the findings (unless the document changed in the meantime) and
+starts the next job.
 
 A document with `//@` annotations gets a third round, in the same goroutine,
-once the types are in order: the [proofs](#proofs). A proof about a program
-with a type error would be a second opinion about code that is about to
-change, so it waits. It costs milliseconds, which is what makes it a thing to
-do as you type rather than a thing to remember to do: strengthen an invariant,
-and the violet line under the `Ensures` goes away before you have reached for
-a command.
+once the types are in order: the [proofs](#proofs). A proof about a program with
+a type error would be a second opinion on code that's about to change, so it
+waits. It costs milliseconds, and that changes everything. Proving becomes
+something that happens as you type, not something you have to remember to do.
+Strengthen an invariant, and the violet line under the `Ensures` vanishes
+before you've reached for a command.
 
 ```go
 // job is a type check: what to check, and then what the check found. The
@@ -13221,7 +13243,7 @@ func path(uri string) string {
 ```
 
 A diagnostic from litgo is a point, but an editor underlines a range. So litgo
-stretches the range over the identifier at that point, when there is one.
+stretches the range over the identifier at that point, if there is one.
 
 ```go
 func (s *server) publish(uri string, version int, doc *lit.Doc, diags []lit.Diag) {
@@ -13296,8 +13318,8 @@ func units(utf8 bool, line string, offset int) int {
 <!-- package: lsp -->
 <!-- imports: bufio, encoding/json, fmt, io, strings, testing, time -->
 
-The test acts as a client. It opens a document that has a type error in a
-chunk, fixes the error, and watches the diagnostics show up and then go away.
+The test plays the client. It opens a document with a type error in a chunk,
+fixes the error, and watches the diagnostics appear and then disappear.
 
 <!-- verbatim -->
 ```go
@@ -13395,19 +13417,18 @@ func TestDiagnosticsComeAndGo(t *testing.T) {
 <!-- package: lsp -->
 <!-- imports: bufio, encoding/json, fmt, go/parser, go/token, io, net/url, os, os/exec, path/filepath, sort, strconv, strings, time, github.com/tlehman/litgo/internal/lit -->
 
-Showing errors is the least an editor does for a Go programmer. It also
-completes names, shows documentation, jumps to definitions, lists references
-and renames things. gopls, Go's language server, does all of that, and none of
-it should be written twice. But gopls reads Go files, and you are in a Markdown
-file where the Go is scattered around in the wrong order.
+Showing errors is the bare minimum. A Go programmer's editor also completes
+names, shows documentation, jumps to definitions, lists references and renames
+things. gopls, Go's language server, already does all of that, and none of it
+should be written twice. There's just one problem. gopls reads Go files, and
+you are in a Markdown file with the Go scattered around in the wrong order.
 
-The source map works in both directions, so litgo can sit between the editor
-and gopls. It starts its own gopls and shows it the tangled files as
-*overlays*. An overlay is the protocol's word for the content of a file that is
-open in an editor, and it takes precedence over what is on disk. Nothing gets
-written. A question about a position in the document turns into the same
-question about a position in a tangled file, and every position in the answer
-gets translated back.
+The source map runs in both directions, so litgo can stand in the middle. It
+starts its own gopls and shows it the tangled files as *overlays* (the
+protocol's word for the text of a file open in an editor, which wins over
+what's on disk). Nothing gets written. A question about a position in the
+document becomes the same question about a position in a tangled file, and
+every position in the answer gets translated back.
 
 ```mermaid
 sequenceDiagram
@@ -13422,15 +13443,15 @@ sequenceDiagram
     S-->>E: pool.lit.md:40:6
 ```
 
-The editor only sees one server, and to the editor a `.lit.md` buffer is a Go
-buffer wherever the cursor is on Go. This works in any editor, because nothing
-here is specific to Neovim.
+The editor sees one server. Wherever the cursor is on Go, a `.lit.md` buffer
+is a Go buffer. And since nothing here is specific to Neovim, it works in any
+editor.
 
 ## A server of our own
 
-litgo looks for gopls on the `$PATH` first, and then in the directory where
-`go install` puts it, because not everyone has that directory on their `$PATH`.
-Without gopls, litgo is just the server from the last chapter.
+litgo looks for gopls on the `$PATH` first, then in the directory where
+`go install` puts it, since not everyone has that directory on their `$PATH`.
+No gopls? Then litgo is just the server from the last chapter.
 
 ```go
 // findGopls locates the gopls to run: the one named, or the one that can be
@@ -13459,16 +13480,16 @@ func findGopls(named string) string {
 }
 ```
 
-From gopls's side, litgo is the client. Requests are numbered, and `pending`
-holds what to do with each answer until the answer arrives. The editor might
-cancel a request before then, so litgo also keeps the editor's own number for
-the request.
+From where gopls sits, litgo is the client. Requests are numbered, and
+`pending` holds what to do with each answer until it arrives. The editor might
+cancel a request in the meantime, so litgo also remembers the editor's own
+number for it.
 
-gopls adds two goroutines to the server, and no locks. One writes to gopls's
-standard input and one reads its standard output. The reader sends each message
-to the server's loop over `msgs`. The loop does all the bookkeeping and runs
-every `done` function, so an answer from gopls gets translated by the same
-goroutine that owns the documents and the overlays.
+gopls adds two goroutines to the server, and zero locks. One writes to gopls's
+standard input, the other reads its standard output and hands each message to
+the server's loop over `msgs`. The loop does all the bookkeeping and runs every
+`done` function. So an answer from gopls is translated by the same goroutine
+that owns the documents and the overlays, and nobody has to share.
 
 ```mermaid
 sequenceDiagram
@@ -13542,18 +13563,16 @@ func (g *gopls) cancel(params json.RawMessage) {
 ```
 
 gopls sends three kinds of message. An answer goes to whoever is waiting for
-it. A request of its own (to register a capability, or to read configuration)
-gets `null` back, and gopls takes that to mean "use your defaults". Of its
-notifications, litgo only passes error messages on. The progress reports are
-about files you never see. The diagnostics would repeat the ones the type
-checker from the last chapter already placed, or in the worst case contradict
-them. And the one warning gopls has is that someone is editing a generated
-file.
+it. A request of its own (to register a capability, or read configuration)
+gets `null` back, which gopls takes to mean "use your defaults". Of its
+notifications, litgo passes on only the error messages. The progress reports
+are about files you never see. The diagnostics would repeat the ones the type
+checker from the last chapter already placed, or worse, contradict them. And
+gopls's one warning is that someone is editing a generated file. Yes, we know.
 
-The reader drops the notifications nobody wants before they get to the loop,
-because gopls sends a lot of them. It closes `msgs` when gopls hangs up. The
-loop then marks gopls as dead and tells everyone who was waiting for an answer
-that there won't be one.
+gopls is chatty, so the reader throws away the unwanted notifications before
+they reach the loop. When gopls hangs up, the reader closes `msgs`. The loop
+marks gopls as dead and tells everyone still waiting that no answer is coming.
 
 ```go
 // listen reads what gopls sends until it hangs up or the server stops.
@@ -13620,16 +13639,15 @@ func (g *gopls) hangUp() {
 }
 ```
 
-litgo starts gopls while the editor is waiting for the answer to its
-`initialize`, because what litgo can promise the editor depends on what gopls
-promises litgo. litgo tells gopls what the editor told litgo (the workspace,
-and what the editor can display, like snippets in completions and Markdown in
-hovers). It leaves out the capabilities that would make gopls send requests of
-its own.
+litgo starts gopls while the editor waits for its answer to `initialize`,
+because what litgo can promise the editor depends on what gopls promises
+litgo. It passes along what the editor said (the workspace, and what the editor
+can display, like snippets in completions and Markdown in hovers), minus the
+capabilities that would make gopls send requests of its own.
 
-The loop is the goroutine that runs `start`, so it can't be in its `select`
-while it waits for gopls to answer. `start` receives from `msgs` itself until
-the answer has come.
+There's a catch. The loop is the goroutine running `start`, so it can't sit in
+its `select` while it waits for gopls. `start` reads from `msgs` itself until
+the answer shows up.
 
 ```go
 // start runs gopls and introduces litgo to it the way the editor introduced
@@ -13704,14 +13722,14 @@ func (s *server) stop() {
 
 ## Overlays
 
-gopls has to see the latest text before it gets asked about it. A completion
-request comes right after the keystroke that triggered it, sooner than the
-delay that diagnostics wait for. So tangling doesn't wait. Whoever needs the
-tangled files, whether that is the analysis or a request, calls `sync`, and
-`sync` tangles at most once per version of the text. Both of them run on the
-loop, so they can't get in each other's way. A document with a broken
-chunk structure still gets tangled as well as it can be, because you are in the
-middle of something and would still like completions.
+gopls has to see the latest text before anyone asks it a question. A
+completion request arrives right after the keystroke that triggered it, long
+before the delay diagnostics wait for. So tangling can't wait either. Whoever
+needs the tangled files (the analysis, or a request) calls `sync`, and `sync`
+tangles at most once per version of the text. Both run on the loop, so they
+never trip over each other. A document with broken chunk structure still gets
+tangled as well as it can be. You're in the middle of something, and you'd
+still like completions.
 
 ```go
 // overlay is a tangled file as gopls was last shown it.
@@ -13742,8 +13760,8 @@ func (s *server) forget(uri string) {
 }
 ```
 
-A document like this one tangles to dozens of files, and a keystroke only
-changes one of them. litgo only sends that one.
+A document like this one tangles to dozens of files, and a keystroke changes
+one of them. litgo sends only that one.
 
 ```go
 // overlay brings gopls up to date with what a document tangles to: new
@@ -13798,8 +13816,8 @@ func fileURI(path string) string {
 ```
 
 When gopls names a file in an answer, it might be one of these overlays.
-`output` finds it, along with the document it came from, and prefers the
-tangling that was current when the question was asked.
+`output` finds it and the document it came from, preferring the tangling that
+was current when the question was asked.
 
 ```go
 func (s *server) output(uri string, asked *lit.Result) (o *lit.Output, doc *lit.Doc, owner string) {
@@ -13824,9 +13842,9 @@ func (s *server) output(uri string, asked *lit.Result) (o *lit.Output, doc *lit.
 
 ## Questions
 
-These are the requests that ask about a position in a document, each with the
+Here are the requests that ask about a position in a document, each with the
 capability that announces it. litgo offers the editor whatever gopls offers
-litgo, as long as it is in this list. It always offers four of them, because it
+litgo, as long as it's on this list. Four of them it always offers, because it
 can answer those itself when the position is on a chunk.
 
 ```go
@@ -13885,10 +13903,10 @@ func (s *server) proxy(m *message) bool {
 }
 ```
 
-`Locate` translates the position in the question. If the position is in prose,
-or in a Lua block, or on a line that an exclude pattern drops, then it isn't
-anywhere in a Go file and the answer is `null`. Every one of these requests
-allows `null`, and editors accept it silently.
+`Locate` translates the position in the question. A position in prose, in a
+Lua block, or on a line an exclude pattern drops isn't anywhere in a Go file,
+so the answer is `null`. Every one of these requests allows `null`, and editors
+take it without a word.
 
 ```go
 // position is the protocol's: a line, and a column in the agreed units.
@@ -13941,11 +13959,10 @@ func (s *server) respond(to *message, result any) {
 }
 ```
 
-gopls counts columns in UTF-16 code units and doesn't offer anything else. That
-is why litgo stops agreeing to bytes with the editor when gopls is there. It
-means positions in files litgo knows nothing about (the standard library, a
-dependency) can pass through untouched. litgo has the text of the documents and
-the tangled files, so it converts the columns for those.
+gopls counts columns in UTF-16 code units, and nothing else. So when gopls is around, litgo stops agreeing to bytes with the
+editor. That way positions in files litgo knows nothing about (the standard
+library, a dependency) pass through untouched. For the documents and the
+tangled files, litgo has the text, so it converts the columns itself.
 
 ```go
 // offset converts a column in UTF-16 code units (or in bytes) to a byte
@@ -13969,12 +13986,12 @@ func offset(utf8 bool, line string, n int) int {
 
 ## Questions about chunks
 
-A chunk reference is a comment, so gopls has nothing to say about it. But the
-questions still make sense, and litgo knows the answers. A reference is
-*defined* by the blocks of its chunk, hovering shows those blocks, the
-*references* to a chunk are its references, and renaming it is `Rename`. If you
-ask for the definition of a definition, litgo answers with the uses, so one key
-takes you back and forth. All of this works with or without gopls.
+To gopls, a chunk reference is just a comment, so it has nothing to say. But
+the questions still make sense, and litgo knows the answers. A reference is
+*defined* by the blocks of its chunk, and hovering shows those blocks. The
+*references* to a chunk are, well, its references, and renaming one is
+`Rename`. Ask for the definition of a definition and litgo answers with the
+uses, so one key takes you back and forth. None of this needs gopls.
 
 <!-- chunk: answer a question about a chunk -->
 ```go
@@ -14039,21 +14056,20 @@ func (s *server) mention(method, uri string, doc *lit.Doc, m *lit.Mention, newNa
 
 ## Answers
 
-The answers vary as much as the questions do, but the positions in them only
-come in a few shapes. So litgo does the translation on the JSON, without a type
-for every kind of answer:
+The answers vary as much as the questions, but the positions inside them come
+in only a few shapes. So litgo translates the raw JSON, with no type for every
+kind of answer:
 
 * A *location* is a `uri` with a `range`, and a *location link* has a
   `targetUri`. If the file is a tangled one, both get rewritten to point at the
-  document. Otherwise it is a file gopls found on disk, and it is left alone.
+  document. Otherwise it's a file gopls found on disk, and it's left alone.
 * A bare *range* anywhere else (the word a hover is about, an occurrence to
   highlight) is in the file the question was about.
 * A *text edit* is a range with a `newText`, and it gets the careful treatment
-  described below.
+  below.
 
-A chunk that is used twice gets tangled twice, and gopls finds a reference in
-each copy. Both translate back to the same place, so litgo removes the
-duplicates from lists.
+A chunk used twice is tangled twice, and gopls finds a reference in each copy.
+Both translate back to the same spot, so litgo drops the duplicates from lists.
 
 ```go
 // translation brings the answer to one question back to the document.
@@ -14163,12 +14179,12 @@ func positioned(v any) string {
 }
 ```
 
-A range gets translated one end at a time, exactly if possible. A range that is
-only for looking at can fall back on `Map`'s approximation. For example, the
-definition of a name in a generated `import` is close enough to the `imports:`
-directive. A range to *replace* can't fall back like that. It also has to have
-the same shape in the document as in the tangled file, and it doesn't if it
-starts in a host line and ends in a chunk spliced into that line.
+A range is translated one end at a time, exactly if possible. A range that's
+only for looking at can fall back on `Map`'s approximation: the definition of a
+name in a generated `import`, say, is close enough to the `imports:` directive.
+A range to *replace* gets no such mercy. It also needs the same shape in the
+document as in the tangled file, and it doesn't have it if it starts in a host
+line and ends in a chunk spliced into that line.
 
 ```go
 // span translates a range in a tangled file to the document it came from.
@@ -14216,15 +14232,15 @@ func outPosition(o *lit.Output, v any) (line, col int, ok bool) {
 }
 ```
 
-An edit that can't be translated gets dropped, with one exception. Completing
-`strings.ToUpper` in a file that doesn't import `strings` comes with edits to
-the `import (` block, and litgo generates that block from the `imports:`
-directive. The edits are useless as they are, because gopls sends the smallest
+An edit that can't be translated gets dropped, with one exception. Complete
+`strings.ToUpper` in a file that doesn't import `strings`, and gopls sends
+edits to the `import (` block, which litgo generated from the `imports:`
+directive. As they stand the edits are useless. gopls sends the smallest
 difference it can find, and between `"fmt"` and `"fmt"`, newline, `"strings"`
-that is a few characters in the middle of a line. But it is easy to find out
-what the edits are *for*. litgo carries them out on the tangled file and looks
-at what the file imports afterwards that it didn't import before. `AddImport`
-knows how to add that to a document.
+that's a few characters in the middle of a line. But what the edits are *for*
+is easy to find out. litgo carries them out on the tangled file and looks at
+what the file imports now that it didn't before. `AddImport` knows how to add
+that to a document.
 
 ```go
 // edit translates a text edit in place, if it has a place in the document.
@@ -14279,7 +14295,7 @@ func (t *translation) edits(o *lit.Output, doc *lit.Doc, list []any) []any {
 }
 ```
 
-The edits in a list all refer to the text as it was before any of them, so they
+Every edit in a list refers to the text as it was before any of them, so they
 get carried out from the bottom up.
 
 <!-- chunk: carry out the edits to the header -->
@@ -14307,17 +14323,16 @@ for _, m := range header {
 }
 ```
 
-Renaming is the one answer that is made entirely of edits, in any number of
-files. It is also the one where dropping an edit is not an option, because a
-rename that is only partly carried out leaves a program that doesn't compile.
-So litgo refuses the whole rename if any part of it can't be done. That
-includes the case where gopls wants to change a tangled file whose document
-isn't open. The change would be lost at the next tangle, and the right way to
-make it is to open that document and rename there.
+Renaming is the one answer made entirely of edits, across any number of files.
+It's also the one where dropping an edit is not an option. Half a rename is a
+program that doesn't compile. So if any part can't be done, litgo refuses the
+whole thing. That includes gopls wanting to change a tangled file whose
+document isn't open. The change would vanish at the next tangle. The right move
+is to open that document and rename there.
 
-The edits come back grouped by tangled file, and they go out grouped by
-document. litgo strips the version numbers gopls put on them, because those are
-versions of overlays the editor has never heard of.
+The edits come back grouped by tangled file and go out grouped by document.
+litgo strips the version numbers gopls put on them, because they are versions
+of overlays the editor has never heard of.
 
 ```go
 // workspaceEdit translates the answer to a rename.
@@ -14392,10 +14407,10 @@ func (s *server) relay(to *message, reply *message, t *translation) {
 <!-- package: lsp -->
 <!-- imports: encoding/json, fmt, os, strconv, strings, testing, time -->
 
-The test needs gopls and gets skipped without it. Its document has a function
-in one block, a call to that function in a chunk, and a clef character in front
-of the call, which is two UTF-16 units and four bytes. Every position in the
-test gets translated twice on the way in and twice on the way out.
+The test needs gopls and skips itself without it. Its document has a function
+in one block, a call to it in a chunk, and a treble clef in front of the call
+(two UTF-16 units, four bytes, maximum trouble). Every position in the test is
+translated twice on the way in and twice on the way out.
 
 <!-- verbatim -->
 ```go
@@ -14502,9 +14517,9 @@ func TestGoplsThroughTheDocument(t *testing.T) {
 
 # The Neovim plugin
 
-The plugin lives in this repository, at the root, where plugin managers look
-for `plugin/` and `lua/`. It is a client of the protocol above, so the two have
-to change together. With lazy.nvim:
+The plugin lives at the root of this repository, where plugin managers look
+for `plugin/` and `lua/`. It is a client of the protocol above, so the two
+change together. With lazy.nvim:
 
 ```lua
 {
@@ -14515,15 +14530,15 @@ to change together. With lazy.nvim:
 }
 ```
 
-The plugin is thin on purpose. Everything that knows about the format is in the
-binary, and the Lua just turns answers into extmarks, edits and diagnostics.
+The plugin is thin on purpose. Everything that knows about the format lives in
+the binary. The Lua just turns answers into extmarks, edits and diagnostics.
 Another editor would need the same four calls and nothing else.
 
 | Command | Key | |
 |---|---|---|
-| *(nothing)* | | Chunk, syntax and type errors show up under the offending line as you type, from `litgo lsp`. So do failed proofs of `//@` annotations, in violet. The annotations themselves are violet in the code, and their formulas are typeset like the math in the prose: `lo*lo <= n ^ n < hi*hi` reads $lo^2 \leq n \land n < hi^2$ until the cursor is on the line. |
-| *(what Neovim has for any language server)* | `K`, `grr`, `grn`, `<C-x><C-o>`, `<C-s>` | In a Go block the buffer acts like a Go buffer. You get gopls's completion, documentation, references, rename and signature help, through `litgo lsp`. |
-| `:TangleCompileAndRun [args]` | `\r` | Saves, tangles, compiles and runs. Panics and failing tests land in the Markdown too, and the cursor goes to the first error. |
+| *(nothing)* | | Chunk, syntax and type errors show up under the offending line as you type, from `litgo lsp`. So do failed proofs of `//@` annotations, in violet. The annotations themselves are violet too, and their formulas are typeset like the math in the prose: `lo*lo <= n ^ n < hi*hi` reads $lo^2 \leq n \land n < hi^2$ until the cursor lands on the line. |
+| *(what Neovim has for any language server)* | `K`, `grr`, `grn`, `<C-x><C-o>`, `<C-s>` | In a Go block the buffer acts like a Go buffer: gopls's completion, documentation, references, rename and signature help, all through `litgo lsp`. |
+| `:TangleCompileAndRun [args]` | `\r` | Saves, tangles, compiles and runs. Panics and failing tests land in the Markdown too, and the cursor jumps to the first error. |
 | `:'<,'>Untangle [name]` | `\u` | Moves the selection into a chunk at the bottom and leaves a reference. |
 | `:RenameChunk [name]` | `\n` | Renames the chunk under the cursor, everywhere. |
 | `:Prove` | `\p` | Saves and checks the `//@` annotations, without compiling or running. |
@@ -14609,7 +14624,7 @@ M.config = {
 }
 ```
 
-The plugin looks for the binary in its own checkout first. That is where a
+The plugin looks for the binary in its own checkout first. That's where a
 plugin manager's build step puts it, and a binary from there is sure to match
 the Lua.
 
@@ -14647,7 +14662,7 @@ function M.bin()
 end
 ```
 
-The plugin sees the protocol as two halves: ask a question about the buffer,
+To the plugin, the protocol has two halves: ask a question about the buffer,
 then apply the edits that come back. Several `nvim_buf_set_lines` calls made
 from one command count as a single undo step.
 
@@ -14700,13 +14715,13 @@ local function define_highlights()
 end
 ```
 
-Everything about proofs is violet: the `//@` annotations in the code, and what
-the verifier has to say about them. No colour scheme has a group for that, and
-the point of the colour is that it is not one of the others. A red line under
-code says the compiler will not take it, a yellow one that `go vet` frowns. A
-violet one says something of a different kind: this compiles, it runs, and it
-has not been shown to do what it promises. The groups are defined with
-`default`, so a colour scheme or a user who disagrees about violet wins.
+Everything about proofs is violet: the `//@` annotations in the code, and
+whatever the verifier has to say about them. No colour scheme has a group for
+that, and the whole point is that it isn't one of the others. A red line under
+code says the compiler won't take it. A yellow one says `go vet` frowns. A
+violet one is news of a different kind: this compiles, it runs, and nobody has
+shown that it does what it promises. The groups are defined with `default`, so
+a colour scheme (or a user with strong opinions about violet) wins.
 
 <!-- chunk: the colour of a proof -->
 ```lua
@@ -14725,12 +14740,12 @@ for name, spec in pairs({
 end
 ```
 
-A completion plugin offers the same sources everywhere in the buffer, which in
-a Go block means Markdown snippets and words from the prose alongside what
+A completion plugin offers the same sources everywhere in the buffer. In a Go
+block that means Markdown snippets and words from the prose, mixed in with what
 gopls has to say. The plugin can't reach into someone else's configuration, so
-it answers the question instead: is this line inside a Go block? Counting
-fences from the top is enough, and cheap, because a completion menu only asks
-about the line the cursor is on.
+it answers the question the configuration needs: is this line inside a Go
+block? Counting fences from the top is enough, and cheap, because a completion
+menu only asks about the line the cursor is on.
 
 ```lua
 --- Is a line (0-based; the cursor's by default) inside a Go block?
@@ -14915,8 +14930,8 @@ local function wanted(item, cfg)
 end
 ```
 
-Everything is drawn with extmarks, and whatever the cursor is on doesn't get
-drawn, so the source is always one keystroke away from its rendering.
+Everything is drawn with extmarks, and whatever the cursor is on is left
+undrawn. The source is always one keystroke away from its rendering.
 
 ```lua
 --- Redraw every extmark. Cheap enough (one pass over the items) to run on
@@ -14964,9 +14979,9 @@ function M.draw(buf)
 end
 ```
 
-A block rendering replaces its source. The source lines get concealed, and the
-drawing hangs off a neighbouring line as virtual lines. While the cursor is
-inside the block, the source shows and the drawing stays underneath as a live
+A rendered block replaces its source. The source lines are concealed, and the
+drawing hangs off a neighbouring line as virtual lines. Move the cursor inside
+the block and the source comes back, with the drawing underneath as a live
 preview.
 
 <!-- chunk: draw a diagram or a displayed formula -->
@@ -14996,18 +15011,18 @@ else
 end
 ```
 
-A table stays where it is, and its lines stay lines of the buffer. The only
-things added are spaces, as inline virtual text, so that the pipes of every row
-end up under the pipes of the header. A column is as wide as its widest cell
-looks. A cell that looks narrower gets the difference as spaces: after its text
-if the column is aligned left, before its text if it is aligned right, and half
-on each side if it is centred. The rule under the header is the one thing that
-gets replaced, by dashes that are as wide as the column. The row the cursor is
-on is left exactly as it was typed, like everything else the cursor is on.
+A table stays put, and its lines stay lines of the buffer. All the plugin adds
+is spaces, as inline virtual text, so the pipes of every row line up under the
+pipes of the header. A column is as wide as its widest cell looks. A narrower
+cell gets the difference as spaces: after its text if the column is aligned
+left, before it if aligned right, half on each side if centred. The rule under
+the header is the one thing replaced, by dashes as wide as the column. The row
+under the cursor is left exactly as it was typed, like everything else the
+cursor is on.
 
-The widths get measured with `strdisplaywidth`, because that is the editor's
-own answer to how many screen cells a string takes up. They are kept with the
-item, so moving the cursor doesn't measure every table again.
+Widths are measured with `strdisplaywidth`, the editor's own answer to how many
+screen cells a string takes up. They're kept with the item, so moving the
+cursor doesn't measure every table again.
 
 <!-- chunk: line up the columns of a table -->
 ```lua
@@ -15066,8 +15081,8 @@ if it.info and it.info ~= "" then
 end
 ```
 
-Analysis is asynchronous and debounced. An answer only gets used if the buffer
-hasn't changed since the question was asked.
+Analysis is asynchronous and debounced. An answer only counts if the buffer
+hasn't changed since the question was asked. Stale news gets thrown away.
 
 ```lua
 local function to_diagnostics(list, buf)
@@ -15247,14 +15262,14 @@ local function litgo()
 end
 ```
 
-Program output streams into a panel at the bottom. The positions in it are
-already in terms of the document, and pressing `<CR>` on one jumps there, as
-`q` closes it again.
+Program output streams into a panel at the bottom. Its positions already point
+into the document: press `<CR>` on one to jump there, and `q` to close the
+panel.
 
-While the program is running the cursor stays where the typing was, because a
-panel that steals the cursor mid-run is a panel that eats keystrokes. So the
-panel opens beside the work and gives the window back, and takes the cursor
-only once the run is over — unless the run ended at an error, where the cursor
+While the program runs, the cursor stays where you were typing. A panel that
+steals the cursor mid-run is a panel that eats keystrokes. So the panel opens
+beside the work, hands the window back, and takes the cursor only once the run
+is over. The exception is a run that ended at an error, because then the cursor
 has somewhere better to be.
 
 ```lua
@@ -15352,9 +15367,9 @@ local function panel_add(text, hl)
 end
 ```
 
-Diagnostics from a run are shown as virtual lines, right under the code that
-caused them. They stay accurate while you edit. Changing a line dismisses the
-error on it, and errors below an edit move with their text.
+Diagnostics from a run show up as virtual lines, right under the code that
+caused them, and they stay accurate while you edit. Change a line and its error
+goes away. Errors below an edit move with their text.
 
 ```lua
 --- Place diagnostics in every file they mention and mirror them in quickfix.
@@ -15651,26 +15666,25 @@ return M
 
 <!-- file: lua/litgo/lsp.lua -->
 
-The language server gets started for each `.lit.md` buffer, and buffers under
-the same root share one server. Neovim shows what the server publishes like any
-other diagnostics, except that the plugin asks for them to be shown in place,
-as virtual lines under the code, the same way the diagnostics of a run are
-shown.
+Each `.lit.md` buffer gets the language server, and buffers under the same
+root share one. Neovim shows what the server publishes like any other
+diagnostics, except that the plugin asks for them in place, as virtual lines
+under the code, just like the diagnostics of a run.
 
-The server brings gopls with it, and the only thing it needs from the plugin is
-help finding gopls. Most Neovim users get gopls from Mason, and Mason installs
-it in a place where only Neovim looks. After that, everything Neovim does for a
-buffer with a language server works here too: `K`, `grr`, `grn`, `<C-x><C-o>`,
+The server brings gopls along, and all it needs from the plugin is help
+finding it. Most Neovim users get gopls from Mason, and Mason installs it
+somewhere only Neovim looks. After that, everything Neovim does for a buffer
+with a language server works here too: `K`, `grr`, `grn`, `<C-x><C-o>`,
 signature help on `<C-s>`, and whatever a completion plugin or a distribution
 adds.
 
 Completion is the exception, because nothing switches it on by itself.
-nvim-cmp and blink.cmp find the server through the buffer it is attached to, so
-they need nothing from the plugin; plain Neovim completes only when asked, on
-`<C-x><C-o>`. So the plugin turns Neovim's own popup on when no completion
-plugin is loaded, and stays out of the way when one is. A completion plugin is
-usually loaded on the first insert, which is later than the server attaches, so
-the question is asked on the first insert too — and then answered once.
+nvim-cmp and blink.cmp find the server through the buffer it's attached to, so
+they need nothing from the plugin. Plain Neovim only completes when asked, on
+`<C-x><C-o>`. So the plugin turns on Neovim's own popup when no completion
+plugin is loaded, and stays out of the way when one is. Completion plugins
+usually load on the first insert, later than the server attaches, so the
+question gets asked again on the first insert, and answered only once.
 
 ```lua
 local M = {}
@@ -15779,18 +15793,18 @@ return M
 
 <!-- file: lua/litgo/proof.lua -->
 
-Neovim colours a diagnostic by its severity and by nothing else, so a failed
-proof would look like a compile error. It should not, because it is a
-different kind of news and calls for a different kind of fix: not the code
-the compiler choked on, but an invariant that says too little.
+Neovim colours a diagnostic by its severity and nothing else, so a failed
+proof would look like a compile error. It shouldn't. It's a different kind of
+news, and it calls for a different kind of fix: not code the compiler choked
+on, but an invariant that says too little.
 
 Diagnostics are drawn by handlers, and handlers can be replaced. The ones that
-draw (signs, underlines, virtual text, virtual lines) are wrapped so that in a
-`.lit.md` buffer they never see a diagnostic whose source is `vego`, and one
-more handler draws exactly those: a violet undercurl, a `∴` in the sign
-column, and the message in violet under the line. They are still ordinary
-diagnostics in every other way, so `]d`, the quickfix list and the location
-list all know about them.
+draw (signs, underlines, virtual text, virtual lines) get wrapped, so that in a
+`.lit.md` buffer they never see a diagnostic whose source is `vego`. One more
+handler draws exactly those: a violet undercurl, a `∴` in the sign column, and
+the message in violet under the line. In every other way they're ordinary
+diagnostics, so `]d`, the quickfix list and the location list all know about
+them.
 
 ```lua
 -- Diagnostics from the verifier, drawn apart from the compiler's.
@@ -16062,11 +16076,11 @@ return M
 
 ## Testing the plugin
 
-Headless Neovim drives the real plugin against the real binary. The test covers
-rendering, both kinds of untangling, renaming, a run that succeeds, a run with
-an error inside a chunk, diagnostics that follow edits, a table whose columns
-get lined up, and a proof: annotations in their own colour, an invariant that
-is broken and reported in violet while the compiler stays quiet, a run that
+Headless Neovim drives the real plugin against the real binary. The test
+covers rendering, both kinds of untangling, renaming, a run that succeeds, a
+run with an error inside a chunk, diagnostics that follow edits, a table whose
+columns get lined up, and a proof: annotations in their own colour, a broken
+invariant reported in violet while the compiler stays quiet, a run that
 refuses to go past it, and `:Prove`.
 
 ```sh
@@ -16483,10 +16497,11 @@ os.exit(failures == 0 and 0 or 1)
 
 # An example
 
-This is a complete literate program. The tests above use it, and it is a good
-first file to open in the editor. It is a document inside a document, so its
-fence is one backtick longer than the fences it contains. It is also
-`verbatim`, because its references belong to it and not to this document.
+Here's a complete literate program, small enough to read over coffee. The tests
+above use it, and it's the best first file to open in the editor. It's a
+document inside a document, so its fence is one backtick longer than the fences
+it contains. It's also `verbatim`, because its references belong to it, not to
+this document.
 
 <!-- file: examples/worker_pool.lit.md -->
 <!-- verbatim -->
@@ -16498,9 +16513,9 @@ fence is one backtick longer than the fences it contains. It is also
 
 # Worker pool in Go
 
-A pool of $n$ workers processes $m$ jobs concurrently. The jobs travel through
-a channel, and the context is cancellable, so we can stop early and still keep
-the partial results.
+Three workers, ten jobs, one deadline. A pool of $n$ workers chews through $m$
+jobs at the same time. The jobs travel through a channel, and the context can
+be cancelled, so we can stop early and still keep whatever already finished.
 
 If every job costs $t$ seconds, the pool finishes in about
 
@@ -16508,8 +16523,8 @@ $$
 T(n, m) = \left\lceil \frac{m}{n} \right\rceil \cdot t
 $$
 
-instead of the $m \cdot t$ a single goroutine would need: a speed-up of
-$\frac{m t}{T} \approx n$ for as long as $n \le m$.
+instead of the $m \cdot t$ one goroutine would need. That's a speed-up of
+$\frac{m t}{T} \approx n$, for as long as $n \le m$.
 
 ```mermaid
 flowchart LR
@@ -16519,9 +16534,9 @@ flowchart LR
 
 ## The shape of the program
 
-The whole program fits on one screen, because each step is a named chunk that
-is explained further down. Chunks are spliced in *textually*, so they see
-`ctx`, `jobs`, `results` and `wg` exactly as if they had been written here.
+The whole program fits on one screen, because every step is a named chunk
+explained further down. Chunks are spliced in *textually*, so they see `ctx`,
+`jobs`, `results` and `wg` exactly as if they'd been written right here.
 
 ```go
 // <<the worker>>
@@ -16544,7 +16559,8 @@ func main() {
 ## The worker
 
 A worker drains `jobs` until the channel closes or the context is cancelled,
-whichever comes first. Doubling stands in for real work.
+whichever comes first. Doubling a number stands in for real work. This worker
+is overpaid.
 
 <!-- chunk: the worker -->
 ```go
@@ -16574,7 +16590,8 @@ sequenceDiagram
 
 ## Cancellation
 
-The deadline is a tiny chunk of its own: an expression, interpolated inline.
+The deadline is a tiny chunk of its own, an expression spliced into the middle
+of a line.
 
 <!-- chunk: set up a cancellable context -->
 ```go
@@ -16583,7 +16600,8 @@ defer cancel()
 time.AfterFunc(/*<<the deadline>>*/, cancel)
 ```
 
-Long enough for roughly half of the jobs.
+Fifty milliseconds. Long enough for roughly half the jobs, so you get to watch
+the cancellation actually cut something off.
 
 <!-- chunk: the deadline -->
 ```go
@@ -16600,7 +16618,7 @@ for i := 0; i < n; i++ {
 }
 ```
 
-The channel is buffered with room for all $m$ jobs, so feeding never blocks.
+The channel has room for all $m$ jobs, so feeding it never blocks.
 
 <!-- chunk: feed the jobs -->
 ```go
@@ -16618,8 +16636,8 @@ go func() {
 }()
 ```
 
-Ranging over `results` ends when the channel closes, which happens after the
-last worker returns — whether it ran out of jobs or was cancelled.
+Ranging over `results` ends when the channel closes, and that happens after the
+last worker returns, whether it ran out of jobs or got cancelled.
 
 <!-- chunk: collect the results -->
 ```go
@@ -16635,11 +16653,11 @@ fmt.Printf("%d of %d jobs finished\n", done, m)
 
 # An example with a proof
 
-The second example is as small as a proved program gets and still says
+The second example is about as small as a proved program can be and still say
 something: an integer square root by bisection, with a contract, an invariant
-and a variant. It is the file to open to see what [Proofs](#proofs) looks like
-from the outside. The tests prove it, and the plugin's test breaks it to see
-the editor object.
+and a variant. Open it to see what [Proofs](#proofs) looks like from the
+outside. The tests prove it, and the plugin's test breaks it on purpose to
+watch the editor object.
 
 <!-- file: examples/isqrt.lit.md -->
 <!-- verbatim -->
@@ -16650,20 +16668,20 @@ the editor object.
 
 # A square root you can trust
 
-The integer square root of $n$ is the largest integer whose square does not
-exceed $n$:
+The integer square root of $n$ is the largest integer whose square doesn't go
+over $n$:
 
 $$
 r = \lfloor \sqrt{n} \rfloor \quad\Longleftrightarrow\quad r^2 \le n < (r+1)^2
 $$
 
 This program finds it by bisection, and it comes with a proof. Not a test that
-it gets $\sqrt{17}$ right, but a proof that the inequality on the right holds
-for the result of *every* call with $n \ge 0$, that the loop always stops, and
-that the division in it can never divide by zero. The proof is written in the
-`//@` comments, in the notation of
+it gets $\sqrt{17}$ right. A proof. A proof that the inequality on the right
+holds for the result of *every* call with $n \ge 0$, that the loop always
+stops, and that the division in it can never divide by zero. The proof lives in
+the `//@` comments, written in the notation of
 [VeGo](https://arxiv.org/abs/2608.22630), and `litgo run` checks it before it
-compiles anything:
+compiles a single line:
 
 ```sh
 litgo run   examples/isqrt.lit.md    # prove, then compile, then run
@@ -16680,9 +16698,9 @@ flowchart LR
 
 ## The contract
 
-The function promises the defining inequality, and asks for one thing in
-return. `Requires` is what the caller owes, `Ensures` is what the function
-owes back, and the result has a name, `r`, so that the promise can mention it.
+The function makes one promise and asks for one thing in return. `Requires` is
+what the caller owes, `Ensures` is what the function owes back, and the result
+gets a name, `r`, so the promise can talk about it.
 
 ```go
 //@ Requires n >= 0
@@ -16692,14 +16710,14 @@ func Isqrt(n int) (r int) {
 //@ Ensures r*r <= n ^ n < (r+1)*(r+1)
 ```
 
-`^` is *and*. The `Ensures` goes under the closing brace, where a conclusion
-belongs.
+`^` means *and*. The `Ensures` sits under the closing brace, which is where a
+conclusion belongs.
 
 ## The loop
 
-Bisection keeps two numbers, one whose square is known to be small enough and
-one whose square is known to be too big, and moves one of them to the middle
-until they are neighbours.
+Bisection keeps two numbers: one whose square is known to be small enough, one
+whose square is known to be too big. It moves one of them to the middle, over
+and over, until they're neighbours.
 
 <!-- chunk: bisect -->
 ```go
@@ -16714,12 +16732,12 @@ for hi-lo > 1 {
 return lo
 ```
 
-The sentence above *is* the invariant: `lo*lo <= n ^ n < hi*hi`. A loop
-invariant is something true before the loop and true again after each time
-round, and the verifier checks exactly those two things. It is true before,
-because $0 \le n$ and $n < (n+1)^2$. Then the verifier forgets everything it
-knew about `lo` and `hi` except the invariant, goes round once, and has to get
-the invariant back.
+The sentence above the loop *is* the invariant: `lo*lo <= n ^ n < hi*hi`. A
+loop invariant is something true before the loop and true again after every
+trip around it, and those are exactly the two things the verifier checks. It's
+true before, because $0 \le n$ and $n < (n+1)^2$. Then the verifier forgets
+everything it knew about `lo` and `hi` except the invariant, goes around once,
+and has to win the invariant back.
 
 <!-- chunk: move whichever end the middle can replace -->
 ```go
@@ -16731,32 +16749,34 @@ if mid*mid <= n {
 ```
 
 Whichever branch runs, the test it just made is word for word the half of the
-invariant it has to restore, so that part is immediate. The other line of the
-invariant, `0 <= lo < hi`, needs the middle to be strictly between the ends,
-and that is where the loop condition earns its keep: `hi - lo > 1` means
+invariant it has to restore. That part comes free. The other line of the
+invariant, `0 <= lo < hi`, needs the middle to land strictly between the ends,
+and that's where the loop condition earns its keep: `hi - lo > 1` means
 `(hi-lo)/2` is at least 1 and less than `hi - lo`.
 
-The same fact proves that the loop stops. The `Variant` is a quantity that is
-never negative while the loop runs and gets smaller on every round. Here it is
-the width of the interval, and both branches narrow it.
+The same fact proves the loop stops. The `Variant` is a quantity that never
+goes negative while the loop runs and shrinks on every round. Here it's the
+width of the interval, and both branches squeeze it.
 
-After the loop the verifier knows the invariant and that the condition is
-false. From `lo < hi` and not `hi - lo > 1` it follows that `hi = lo + 1`, and
-putting that into `n < hi*hi` gives the `Ensures`. Nobody had to say so: those
-few lines of arithmetic are what the prover is for.
+After the loop, the verifier knows two things: the invariant, and that the
+condition is false. From `lo < hi` and not `hi - lo > 1`, it follows that
+`hi = lo + 1`. Plug that into `n < hi*hi` and out comes the `Ensures`. Nobody
+had to spell that out. A few lines of arithmetic like that are exactly what the
+prover is for.
 
 ## What the proof does not say
 
-The integers of the proof are the integers of mathematics. Go's `int` has 64
-bits, and `(n+1)*(n+1)` overflows long before `n` runs out of them. For
-$n < 3 \cdot 10^9$ the two agree; beyond that, the theorem is about a program
-this one only resembles. VeGo makes the same simplification, and it is the
-kind of thing worth knowing about a proof before leaning on it.
+Okay, the fine print. The integers of the proof are the integers of
+mathematics, and they go on forever. Go's `int` has 64 bits, and `(n+1)*(n+1)`
+overflows long before `n` runs out of them. For $n < 3 \cdot 10^9$ the two
+agree. Beyond that, the theorem is about a program this one only resembles.
+VeGo makes the same simplification, and it's the kind of thing you want to
+know about a proof before you lean on it.
 
 ## Running it
 
-`main` has no annotations, so the verifier leaves it alone: a program can be
-proved one function at a time.
+`main` has no annotations, so the verifier leaves it alone. You can prove a
+program one function at a time.
 
 ```go
 func main() {
@@ -16769,8 +16789,8 @@ func main() {
 ## Breaking it
 
 The quickest way to believe a verifier is to lie to it. Change `lo = mid` to
-`lo = mid + 1`, which looks like the usual bisection and is wrong here, and
-run it again:
+`lo = mid + 1`, which looks like textbook bisection and is wrong here, then run
+it again:
 
 ```text
 isqrt.lit.md:61:1: error: Invariant is not maintained by the body of the loop at line 64: 0 <= lo < hi
@@ -16779,21 +16799,21 @@ litgo: proved 0 of 1 annotated functions in isqrt.lit.md (11 obligations, 79 ms)
 litgo: not proved, so not run (--no-prove runs it anyway)
 ```
 
-Both complaints are right. `(mid+1)*(mid+1) <= n` is not what the test
-established, and `mid + 1` can be `hi` itself, which leaves the interval
-empty. In the editor the two lines are violet rather than red, because the
-program still compiles: it is the argument that is broken, not the syntax.
+Both complaints are right. The test only established `mid*mid <= n`, not
+`(mid+1)*(mid+1) <= n`, and `mid + 1` can be `hi` itself, which leaves the
+interval empty. In the editor these two lines turn violet, not red, because the
+program still compiles. The syntax is fine. It's the argument that's broken.
 
-Or weaken the loop condition to `hi-lo > 0`, and the verifier points at the
-`Variant`: with an interval of width one the middle is `lo`, nothing moves,
-and the loop never ends. A test would have hung. The proof just says no.
+Or loosen the loop condition to `hi-lo > 0`, and the verifier points at the
+`Variant`: when the interval is one wide the middle is `lo`, nothing moves, and
+the loop spins forever. A test would have hung. The proof just says no.
 ````
 
 # A tutorial in proofs
 
-The third is a tour of every annotation the verifier checks, one small
-function at a time, ending with binary search. Every function in it is proved
-by the tests, so the tutorial cannot drift away from the verifier it
+The third example is a tour of every annotation the verifier checks, one
+small function at a time, and it ends with binary search. The tests prove every
+function in it, so the tutorial can't drift away from the verifier it
 describes.
 
 <!-- file: examples/vego-tutorial.lit.md -->
@@ -16806,13 +16826,13 @@ describes.
 # VeGo in litgo: a tutorial
 
 [VeGo](https://arxiv.org/abs/2608.22630) (Verified Go, by Tina Massoudi and
-Chris Dutchyn) is a way of writing down what a Go function promises, and why
-its loops are right, in comments that start with `//@`. The program stays
-ordinary Go. litgo reads the comments and proves them, or tells you which one
-it could not prove and for which line of code.
+Chris Dutchyn) lets you write down what a Go function promises, and why its
+loops are right, in comments that start with `//@`. The program stays ordinary
+Go. litgo reads the comments and proves them, or tells you exactly which one it
+couldn't prove, and for which line of code.
 
-This document is a tour of every annotation litgo checks, one small function
-at a time. Every function here is proved each time the document is run:
+This is a tour of every annotation litgo checks, one small function at a time.
+Every function here is proved each time the document runs:
 
 ```sh
 litgo prove examples/vego-tutorial.lit.md   # prove, and list what was proved
@@ -16820,15 +16840,15 @@ litgo run   examples/vego-tutorial.lit.md   # prove, then compile and run
 litgo check examples/vego-tutorial.lit.md   # chunks, syntax, types, proofs
 ```
 
-In Neovim the annotations are violet and their formulas are typeset, so that
-`^` reads ∧, `<=` reads ≤ and `Forall` reads ∀ until the cursor is on the line,
-where you get back what you typed. Anything the verifier has to say about them
-is violet too, as you type. A red line means the compiler will not take the
-program. A violet line means the program runs and has not been shown to keep
-its word.
+In Neovim the annotations are violet and their formulas are typeset: `^`
+reads ∧, `<=` reads ≤ and `Forall` reads ∀, until the cursor lands on the line
+and you get back what you typed. Whatever the verifier has to say about them
+shows up in violet too, as you type. A red line means the compiler won't take
+the program. A violet line means the program runs, but nobody has shown that it
+keeps its word.
 
 The best way to read this is to break things. Change a `<` to a `<=` in any
-block and see what the verifier says.
+block and watch what the verifier says.
 
 ```mermaid
 flowchart LR
@@ -16842,9 +16862,9 @@ flowchart LR
 ## A contract
 
 `Requires` is what the caller owes. `Ensures` is what the function owes back.
-`Requires` goes above the function and `Ensures` directly under its closing
-brace, which is where a conclusion belongs. The result needs a name, so that
-the `Ensures` has something to call it.
+`Requires` goes above the function, and `Ensures` goes directly under its
+closing brace, where a conclusion belongs. The result needs a name, so the
+`Ensures` has something to call it.
 
 ```go
 //@ Requires x > 0 ^ y > 0
@@ -16854,16 +16874,16 @@ func AddPositives(x, y int) (sum int) {
 //@ Ensures sum > x ^ sum > y
 ```
 
-Without the `Requires` this is false (try `0` and `0`), and the verifier says
-so: *Ensures is not proved for the return at line 50*.
+Without the `Requires` this is false (try `0` and `0`), and the verifier
+catches it: *Ensures is not proved for the return at line 50*.
 
-A function without annotations is not looked at. So a program can be proved a
-function at a time, and `main` below is left alone.
+A function with no annotations is left alone. That means you can prove a
+program one function at a time, and `main` below never gets looked at.
 
-One thing to know before your editor surprises you: gofmt rewrites `//@` in a
-doc comment as `// @`, and puts a blank line above an `Ensures`. litgo reads
-both spellings and looks upward past the blank line, so formatting on save
-changes how a contract looks and not what it means.
+One warning before your editor surprises you. gofmt rewrites `//@` in a doc
+comment as `// @`, and puts a blank line above an `Ensures`. litgo reads both
+spellings and looks upward past the blank line, so formatting on save changes
+how a contract looks, not what it means.
 
 ## The language of formulas
 
@@ -16883,18 +16903,17 @@ changes how a contract looks and not what it means.
 | `m in A[a:b)`, `m = A[a:b)` | some element of the range is `m` |
 | `x'` | `x` after an assignment, where `x` is before it |
 
-The length of a slice is usually written the way mathematicians write it,
-`|A|`, and that is how the rest of this tutorial writes it. Go's own `&&`,
-`||` and `!` are accepted for *and*, *or* and *not*.
+Mathematicians write the length of a slice as `|A|`, and so does the rest of
+this tutorial. Go's own `&&`, `||` and `!` work too, for *and*, *or* and *not*.
 
-A formula that is too long for a line goes on in the next `//@` comment, if
-its line ends in something that cannot end a formula: an operator, say.
+A formula too long for one line continues in the next `//@` comment, as long as
+its line ends in something that can't end a formula, like an operator.
 
 ## Safety comes for free
 
-Some obligations are not written by anybody, because the code implies them.
-Every index has to be inside its slice, and every divisor has to be different
-from zero. This function needs its `Requires` for no other reason:
+Some obligations nobody writes down, because the code implies them. Every
+index has to land inside its slice. Every divisor has to be nonzero. This
+function needs its `Requires` for no other reason:
 
 ```go
 //@ Requires 0 <= i ^ i < |A| ^ d <> 0
@@ -16904,12 +16923,12 @@ func ElementOver(A []int, i, d int) (q int) {
 //@ Ensures q * d + A[i] % d = A[i]
 ```
 
-Take away `i < |A|` and the complaint is at the `A[i]` itself: *the index may
-be out of range*. Go stops evaluating `&&` and `||` early, and the verifier
-knows that, so `i < len(A) && A[i] > 0` is fine with nothing said about `i`.
+Take away `i < |A|` and the complaint lands on the `A[i]` itself: *the index
+may be out of range*. The verifier also knows that Go stops evaluating `&&` and
+`||` early, so `i < len(A) && A[i] > 0` is fine with nothing said about `i`.
 
-The `Ensures` shows that the prover knows what division means: a quotient and
-a remainder add up.
+The `Ensures` shows that the prover knows what division means: the quotient and
+the remainder add back up.
 
 ```go
 //@ Requires n >= 0
@@ -16921,15 +16940,15 @@ func Halve(n int) (h int) {
 
 ## Loops
 
-Nobody knows how often a loop goes round, so the verifier does not try to
-follow it. It asks for an **invariant**: a formula that is true when the loop
-is reached and true again after every round. It proves those two things, and
-after the loop the invariant, together with the loop condition being false, is
+Nobody knows how many times a loop will go round, so the verifier doesn't
+try to follow it. It asks for an **invariant** instead: a formula that is true
+when the loop is reached, and true again after every round. It proves those two
+things. After the loop, the invariant plus the loop condition being false is
 everything it knows.
 
-A **variant** is for termination: an integer expression that is not negative
-while the loop runs and that every round makes smaller. A loop without one is
-still proved correct *if* it ends, and gets a warning that says so.
+A **variant** is for termination: an integer expression that stays nonnegative
+while the loop runs and shrinks every round. A loop without one is still proved
+correct *if* it ends, and gets a warning saying so.
 
 ```go
 //@ Requires n >= 0 ^ d > 0
@@ -16946,15 +16965,15 @@ func Divide(n, d int) (q, r int) {
 ```
 
 Read the invariant against the `Ensures`. They differ only in `r < d`, and
-that is exactly the loop condition being false. Finding an invariant is mostly
-this: take the postcondition and weaken it until it is true before the loop
-starts.
+that is exactly the loop condition being false. That's most of the secret to
+finding invariants: take the postcondition and weaken it until it's true before
+the loop starts.
 
-`Requires d > 0` is there for the variant. With `d = 0` the loop would run
-forever, and the verifier notices: *Variant is not shown to decrease*.
+`Requires d > 0` is there for the variant. With `d = 0` the loop runs forever,
+and the verifier notices: *Variant is not shown to decrease*.
 
-The two annotations may also stand at the end of the loop's body, which is
-where VeGo's own examples tend to put them.
+The two annotations can also sit at the end of the loop's body, which is where
+VeGo's own examples tend to put them.
 
 ### Counted loops, `range`, `continue`
 
@@ -16973,15 +16992,15 @@ func SumTo(n int) (s int) {
 //@ Ensures 2*s = n*(n+1)
 ```
 
-That is Gauss's formula, with the division multiplied away. Notice that
-nothing here is linear, and the proof goes through anyway, because
-`(i+1)*i` and `i*i + i` are the same polynomial.
+That's Gauss's formula, with the division multiplied away. Nothing here is
+linear, and the proof goes through anyway, because `(i+1)*i` and `i*i + i` are
+the same polynomial.
 
 A `range` loop always ends, so it needs no variant. Its counter runs from `0`
-to the length, and the verifier knows that without being told. `continue`
-jumps to the end of the round, where the invariant is due as usual. The call
-of `fmt.Println` is let through because all it is handed are numbers and a
-string, so it cannot change anything the proof is about.
+to the length, and the verifier knows that without being told. `continue` jumps
+to the end of the round, where the invariant is due as usual. The call to
+`fmt.Println` is allowed because all it gets are numbers and a string, so it
+can't change anything the proof cares about.
 
 ```go
 func Count(A []int, x int) (n int) {
@@ -17001,11 +17020,11 @@ func Count(A []int, x int) (n int) {
 ### `break`, and what cannot happen
 
 A `break` leaves the loop with whatever is known at that point. The invariant
-is not assumed there, since the round was not finished.
+isn't assumed there, because the round never finished.
 
-`Exsures` is the negative of `Ensures`. It describes a state that no return
-may be in, which is sometimes the more natural thing to say: *it never
-happens that a position is returned and the element there is not `x`*.
+`Exsures` is the negative of `Ensures`. It describes a state no return may ever
+be in, which is sometimes the more natural thing to say: *it never happens that
+a position is returned and the element there is not `x`*.
 
 ```go
 func Find(A []int, x int) (at int) {
@@ -17030,9 +17049,9 @@ func Find(A []int, x int) (at int) {
 
 `x <> A[0:i)` in the last example was a quantifier in disguise: *`x` differs
 from every element of `A` from `0` up to but not including `i`*. The ends of a
-range are written like the ends of an interval, `[` or `]` for an end that is
-included and `(` or `)` for one that is not. An order comparison with a range
-holds for all of its elements; `=` and `in` hold for some element.
+range are written like the ends of an interval, `[` or `]` for an end that's
+included and `(` or `)` for one that isn't. An order comparison with a range
+holds for all of its elements. `=` and `in` hold for some element.
 
 ```go
 //@ Requires |A| > 0
@@ -17051,13 +17070,13 @@ func Max(A []int) (m int) {
 //@ Ensures A[:] <= m ^ m in A[:]
 ```
 
-Both halves of that `Ensures` matter. `A[:] <= m` by itself is satisfied by
-returning a billion. A contract that is too weak is proved just as happily as
-a good one, and it is the reader who has to notice.
+Both halves of that `Ensures` matter. `A[:] <= m` on its own is satisfied by
+returning a billion. A contract that's too weak gets proved just as happily as
+a good one, and it's on you, the reader, to notice.
 
-A `Predicate` gives a formula a name. It is not a function and is never run;
-using it means its body. This one also shows a formula going on in the next
-line, after the `:`.
+A `Predicate` gives a formula a name. It isn't a function and never runs, using
+it just means using its body. This one also shows a formula continuing on the
+next line, after the `:`.
 
 ```go
 //@ Predicate Sorted(A) ::= Forall i in [0, |A|) :
@@ -17068,9 +17087,9 @@ line, after the `:`.
 
 ## Calls
 
-A call is where verification is modular. The caller never looks inside the
-callee: it proves the callee's `Requires`, and what it learns about the result
-is the callee's `Ensures`, and nothing else.
+Calls are where verification goes modular. The caller never looks inside the
+callee. It proves the callee's `Requires`, and all it learns about the result
+is the callee's `Ensures`. Nothing else.
 
 ```go
 //@ Requires Between(0, x, 10)
@@ -17086,13 +17105,12 @@ func UseTwice(k int) (r int) {
 //@ Ensures r = 4*k + 10
 ```
 
-Make that `Between(1, k, 6)` and the second call is refused: *this call does
-not establish what Twice requires*.
+Change that to `Between(1, k, 6)` and the second call is refused: *this call
+does not establish what Twice requires*.
 
 `double` in that `Ensures` is a Go function. A function whose whole body is
-`return` and one expression can be used in a formula, where it means that
-expression. It is a way to give the contract a vocabulary that the program
-shares.
+`return` plus one expression can be used in a formula, where it means that
+expression. It gives the contract a vocabulary it shares with the program.
 
 ```go
 func double(x int) int { return 2 * x }
@@ -17101,12 +17119,13 @@ func double(x int) int { return 2 * x }
 ## Recursion
 
 Recursion is induction. Inside `Triangle`, the call `Triangle(n-1)` is known
-by the contract being proved: that is the induction hypothesis, and using it is
-sound as long as the induction is well-founded. `Measure` is what makes it so:
-an expression that is not negative and is smaller at every recursive call.
-`BaseCase` marks where the induction starts, and the verifier checks that no
-recursive call can be reached once it has held. `InductionHypothesis` states,
-and proves, what makes the recursive call legal.
+through the very contract being proved. That's the induction hypothesis, and
+using it is sound as long as the induction is well-founded (it can't go down
+forever). `Measure` is what makes it so: an expression that is nonnegative and
+gets smaller at every recursive call. `BaseCase` marks where the induction
+starts, and the verifier checks that no recursive call can be reached once it
+has held. `InductionHypothesis` states, and proves, what makes the recursive
+call legal.
 
 ```go
 //@ Requires n >= 0
@@ -17123,19 +17142,19 @@ func Triangle(n int) (t int) {
 ```
 
 Write `Triangle(n)` instead and the contract would still "follow" from itself.
-The `Measure` is what catches it: *Measure is not shown to get smaller in the
-recursive call*.
+Circular reasoning, caught red-handed by the `Measure`: *Measure is not shown
+to get smaller in the recursive call*.
 
 ## Assertions and primes
 
-`Assert` is a claim about the state at one point. It is proved there, and
-known from there on, so it doubles as a stepping stone when the prover needs
-to be led. The word is optional: a bare formula is an assertion.
+`Assert` is a claim about the state at one point. It's proved there and known
+from there on, so it doubles as a stepping stone when the prover needs a hand.
+The word is optional: a bare formula is an assertion.
 
 A primed name is a value *after* an assignment. In a formula that mentions
-`x'`, the `x'` is the value now and the plain `x` is the value one assignment
-earlier, and with `x''` everything moves one further back. This is the old
-trick of swapping two numbers without a third:
+`x'`, the `x'` is the value now and plain `x` is the value one assignment
+earlier, and `x''` moves everything one step further back. Here's the old trick
+of swapping two numbers without a third:
 
 ```go
 func Swap(a, b int) (x, y int) {
@@ -17155,9 +17174,9 @@ whatever the body has done to its copy since.
 
 ## Promises that last: `Preserves`
 
-`Preserves` states something once and has it checked after every assignment
-until the block ends. A loop inside that block may assume it, so it does not
-have to be repeated in the invariant.
+`Preserves` states something once and gets it checked after every assignment
+until the block ends. A loop inside that block may assume it, so the invariant
+doesn't have to repeat it.
 
 ```go
 //@ Requires amount >= 0
@@ -17176,15 +17195,15 @@ func Transfer(from, to, amount int) (f, t int) {
 
 No money is created or destroyed. The parallel assignment is the point: `f--`
 followed by `t++` would break the promise for the length of one statement, and
-the verifier would say which one.
+the verifier would tell you which one.
 
 ## The escape hatch: `Axiom`
 
 The prover is complete for nothing. Its arithmetic is linear, with products
-treated as unknowns about which it knows a few facts, and the cube of a
-number is past what it knows. `Axiom` tells it, and it believes you without
-proof. That is exactly as dangerous as it sounds, so every `Axiom` is reported
-as a warning, every time.
+treated as unknowns it knows a few facts about, and the cube of a number is
+beyond it. `Axiom` tells it, and it believes you without proof. That is exactly
+as dangerous as it sounds, so every `Axiom` gets reported as a warning, every
+time.
 
 ```go
 //@ Requires x >= 0
@@ -17197,10 +17216,9 @@ func Cube(x int) (c int) {
 
 ## All of it at once: binary search
 
-The most famous loop with a bug in it. The invariant says that everything to
-the left of `lo` is too small and everything from `hi` on is too big, and
-`Sorted` is what lets one comparison with `A[mid]` speak for a whole half of
-the slice.
+The most famous loop with a bug in it. The invariant says everything left of
+`lo` is too small and everything from `hi` on is too big. `Sorted` is what lets
+one comparison with `A[mid]` speak for a whole half of the slice.
 
 ```go
 //@ Requires Sorted(A)
@@ -17225,36 +17243,36 @@ func Search(A []int, x int) (at int, found bool) {
 //@ Ensures ~found -> x <> A[:]
 ```
 
-Four things are proved here, and only two of them were written down: if
-`found`, then `at` is a position of `x`; if not, `x` is nowhere in `A`; and,
-unasked, `A[mid]` is always inside the slice, and the loop ends. Try
+Four things are proved here, and only two were written down. If `found`, then
+`at` is a position of `x`. If not, `x` is nowhere in `A`. And, unasked,
+`A[mid]` is always inside the slice, and the loop ends. Now break it. Try
 `lo = mid` (it loops forever, and the `Variant` says so), `hi = mid - 1` (it
-skips an element, and the invariant is not maintained), or drop the
-`Requires` (and nothing about the halves follows).
+skips an element, and the invariant isn't maintained), or drop the `Requires`
+(and nothing about the halves follows).
 
 ## What is left out
 
-litgo's checker is its own, because the paper's `vegop` has not been
-published, and it is deliberately smaller than what the paper describes.
+litgo's checker is its own, because the paper's `vegop` hasn't been
+published, and it's deliberately smaller than what the paper describes.
 
 * **The fragment.** Integers, booleans, slices of integers that are read and
   not written, integer and boolean fields of structs, `if`, `for`, `range`,
   `break`, `continue`, `return`, and calls of annotated functions. An
   annotated function that uses anything else is reported as *not verified*,
-  with the line that was too much. It is never silently passed.
-* **No writes through a slice or a pointer.** `A[i] = x` may change another
-  slice that shares the array, and a proof that did not notice would prove
+  with the line that went too far. It's never silently passed.
+* **No writes through a slice or a pointer.** `A[i] = x` might change another
+  slice that shares the array, and a proof that didn't notice would prove
   something false. So sorting is out, for now.
 * **Not Go, so not here.** VeGo's `.vgo` dialect has `while`, `skip` and
   functions inside functions. A litgo block is Go, where `for cond {}`, an
-  empty statement and a second function say the same.
+  empty statement and a second function say the same things.
 * **Read but not checked.** `Property`, and contracts on interface methods.
-  They get a warning rather than silence.
-* **The integers are mathematical.** Overflow is not modelled, here or in the
+  They get a warning, not silence.
+* **The integers are mathematical.** Overflow isn't modelled, here or in the
   paper.
 * **"Not proved" is not "false".** The prover never calls a false thing
-  proved, and it sometimes fails to prove a true one. The cure is usually a
-  stronger invariant or an `Assert` on the way.
+  proved, but sometimes it fails to prove a true one. The cure is usually a
+  stronger invariant, or an `Assert` along the way.
 
 ## Running it
 
@@ -17286,10 +17304,10 @@ func main() {
 
 # An example with a tree in it
 
-The fourth proves things about data structures: a binary heap, which is a tree
-kept in a slice, and a ring buffer. The numbering of the heap really is a
-tree, the heap property really does put the maximum at the root, and the
-operations of the ring really do keep its invariant.
+The fourth example goes after data structures: a binary heap (a tree kept in a
+slice) and a ring buffer. The heap's numbering really is a tree. The heap
+property really does put the maximum at the root. The ring's operations really
+do keep its invariant. Not "the tests pass". Proved.
 
 <!-- file: examples/heap.lit.md -->
 <!-- verbatim -->
@@ -17300,23 +17318,22 @@ operations of the ring really do keep its invariant.
 
 # A tree in an array, and a queue in a circle
 
-Two data structures that are nothing but integers and a slice, which is what
-makes them good first subjects for a proof: a binary heap, which is a tree
-with no pointers in it, and a ring buffer, which is a queue with no end.
+A binary heap is a tree with no pointers in it. A ring buffer is a queue with
+no end. Both are nothing but integers and a slice, which makes them perfect
+first subjects for a proof.
 
 Everything here is proved by `litgo prove`, in the notation of
-[VeGo](https://arxiv.org/abs/2608.22630). What "proved" means for a data
-structure comes in three kinds, and each shows up below:
+[VeGo](https://arxiv.org/abs/2608.22630). For a data structure, "proved" comes
+in three flavors, and you'll meet all of them below:
 
 * **The shape is right.** The arithmetic that finds a parent or a child really
-  does describe a tree: children know their parent, nobody is their own
-  ancestor, no index falls off the slice.
-* **The invariant means something.** From "every node is at most its parent",
-  which is a local fact, it follows that the root is the maximum, which is a
-  global one. That step is an induction, and a loop is how an induction is
-  written.
-* **The operations keep the invariant.** Whatever state a ring buffer is in,
-  if it was a valid one before `Push`, it is a valid one after.
+  does describe a tree. Children know their parent, nobody is their own
+  ancestor, and no index falls off the end of the slice.
+* **The invariant means something.** "Every node is at most its parent" is a
+  local fact. "The root is the maximum" is a global one. Getting from one to
+  the other is an induction, and in code, an induction is a loop.
+* **The operations keep the invariant.** If a ring buffer was valid before
+  `Push`, it is valid after. Whatever state it was in.
 
 ```mermaid
 flowchart TD
@@ -17327,9 +17344,9 @@ flowchart TD
 
 ## The shape of the tree
 
-The tree is in the numbering. Node $i$ has its children at $2i+1$ and $2i+2$,
-and so its parent at $\lfloor (i-1)/2 \rfloor$. Three one-line functions, and
-their contracts say that they fit together.
+There are no pointers. The tree lives in the numbering. Node $i$ has its
+children at $2i+1$ and $2i+2$, so its parent is at $\lfloor (i-1)/2 \rfloor$.
+That's three one-line functions, and their contracts say they fit together.
 
 ```go
 //@ Requires i >= 0
@@ -17346,26 +17363,27 @@ func Parent(i int) (p int) { return (i - 1) / 2 }
 //@ Ensures i = Left(p) v i = Right(p)
 ```
 
-`Parent(Left(i)) = i` needs the verifier to know that $2i/2 = i$ and that
-$(2i+1)/2 = i$ too, which is what rounding down means. A function that is one
-`return` of one expression can be used inside a formula, where it stands for
-that expression, so the contracts can talk about each other.
+For `Parent(Left(i)) = i`, the verifier has to know that $2i/2 = i$ and also
+that $(2i+1)/2 = i$ (that's what rounding down means). A function whose whole
+body is one `return` of one expression can be used inside a formula, where it
+stands for that expression. That's how the contracts get to talk about each
+other.
 
-`0 <= p < i` is the important one. It says a parent's number is smaller than
-its child's. So walking upwards always makes progress, there are no cycles,
-and every walk ends at node 0. That is what makes this numbering a *tree*.
+`0 <= p < i` is the one that matters. A parent's number is smaller than its
+child's. So every step upward makes progress, there are no cycles, and every
+walk ends at node 0. That is what makes this numbering a *tree*.
 
 ## The heap property
 
-A max-heap is a tree in which no node is larger than its parent. As a
+A max-heap is a tree where no node is larger than its parent. Here it is as a
 predicate over the whole slice:
 
 ```go
 //@ Predicate Heap(A) ::= Forall k in [1, |A|) : A[Parent(k)] >= A[k]
 ```
 
-Checking it is a loop over the nodes that have a parent. The contract is an
-*if and only if*: `true` means it is a heap, and `false` means it is not, which
+Checking it is a loop over every node that has a parent. The contract is an
+*if and only if*. `true` means it's a heap, and `false` means it isn't, which
 is the half people forget to promise.
 
 ```go
@@ -17383,16 +17401,16 @@ func IsHeap(A []int) (ok bool) {
 //@ Ensures ok <-> Heap(A)
 ```
 
-Nobody wrote that `A[Parent(i)]` is inside the slice. The verifier works it
-out from `1 <= i < len(A)` and the meaning of division, or refuses the
-function.
+Notice what nobody wrote: that `A[Parent(i)]` is inside the slice. The
+verifier works that out from `1 <= i < len(A)` and the meaning of division. Or
+it refuses the function.
 
 ## From local to global: the root is the maximum
 
-The heap property only compares a node with its parent. That the root beats
-*every* node follows by climbing: if $A[j] \ge A[i]$ and $j$ is not the root,
-then $A[\mathrm{Parent}(j)] \ge A[j] \ge A[i]$, and the parent is closer to
-the root.
+The heap property only ever compares a node with its parent. So how do we know
+the root beats *every* node? By climbing. If $A[j] \ge A[i]$ and $j$ is not
+the root, then $A[\mathrm{Parent}(j)] \ge A[j] \ge A[i]$, and the parent is one
+step closer to the top.
 
 ```go
 //@ Requires Heap(A) ^ 0 <= i < |A|
@@ -17409,13 +17427,13 @@ func Depth(A []int, i int) (d int) {
 //@ Ensures d >= 0 ^ A[0] >= A[i]
 ```
 
-The function counts how deep node `i` is. Its proof is the interesting part:
-the invariant carries `A[j] >= A[i]` up the tree, and when the loop ends `j`
-is 0. The `Variant` is `j` itself, which shrinks because `Parent(j) < j`. So
-the same contract proves that the climb is correct and that it ends.
+The function counts how deep node `i` is, but the proof is the interesting
+part. The invariant carries `A[j] >= A[i]` up the tree like a torch, and when
+the loop ends, `j` is 0. The `Variant` is `j` itself, which shrinks because
+`Parent(j) < j`. One contract proves the climb is correct *and* that it ends.
 
-That was one node. For all of them at once, the induction goes over the
-numbering instead of up a path: if the root beats every node below `k`, it
+That was one node. For all of them at once, the induction runs over the
+numbering instead of up a path. If the root beats every node below `k`, it
 beats `Parent(k)`, which beats `k`.
 
 ```go
@@ -17432,19 +17450,20 @@ func Max(A []int) (m int) {
 ```
 
 This loop does nothing. (The `Assert` is the step of the induction, written
-out for the reader. The prover finds it without being told.) The loop is there
-because it is the proof: VeGo has no ghost
-code, so an induction has to be a loop that could run, and this one runs. It
-costs a pass over the slice to return `A[0]`, which a real heap would not pay,
-and the honest way to use it is as a lemma, once, in a test. It is worth
-seeing anyway, because it shows what a loop invariant *is*: the induction
-hypothesis, with the loop as the induction.
+out for you. The prover finds it without being told.) The loop is there
+because the loop *is* the proof. VeGo has no
+ghost code (code that exists only for the proof and never runs), so an
+induction has to be a loop that could run, and this one runs. It costs a whole
+pass over the slice to return `A[0]`, which no real heap would pay, so the
+honest way to use it is as a lemma, once, in a test. It's worth seeing anyway,
+because it shows what a loop invariant *is*: the induction hypothesis, with the
+loop as the induction.
 
 ## One step of sifting down
 
-Repairing a heap means swapping a node with its larger child. Choosing that
-child is where the off-by-one errors live, because a node can have two
-children, one, or none.
+You repair a heap by swapping a node with its larger child. Picking that child
+is where the off-by-one errors live, because a node can have two children, or
+one, or none.
 
 ```go
 //@ Requires i >= 0 ^ Left(i) < |A|
@@ -17459,30 +17478,30 @@ func LargerChild(A []int, i int) (c int) {
 //@ Ensures A[c] >= A[Left(i)] ^ (Right(i) < |A| -> A[c] >= A[Right(i)])
 ```
 
-Go stops evaluating `&&` at the first `false`, and the verifier knows it, so
-`A[Right(i)]` is only obliged to be in range when `Right(i) < len(A)` has just
-been checked. Swap the two halves of that condition and the proof fails at the
-index.
+Go stops evaluating `&&` at the first `false`, and the verifier knows it. So
+`A[Right(i)]` only has to be in range once `Right(i) < len(A)` has just been
+checked. Swap the two halves of that condition and the proof fails, right at
+the index.
 
-The swap itself is `A[i], A[c] = A[c], A[i]`, and that is where this verifier
-stops: it does not follow writes into a slice, because another slice may share
-the array. So `main` below does the swapping, unproved, with the proved
+The swap itself is `A[i], A[c] = A[c], A[i]`, and that's where this verifier
+stops. It doesn't follow writes into a slice, because another slice may share
+the same array. So `main` below does the swapping, unproved, with the proved
 function telling it where.
 
 ## A queue in a circle
 
-A ring buffer is three integers and a slice: where the oldest element is, how
-many there are, and how much room. Its invariant is what makes those three
-numbers a queue.
+A ring buffer is three integers and a slice: where the oldest element sits, how
+many elements there are, and how much room there is. The invariant is what
+turns those three numbers into a queue.
 
 ```go
 //@ Predicate Ring(head, size, room) ::= room > 0 ^ 0 <= head < room ^ 0 <= size <= room
 ```
 
-Every operation has the same contract in outline: *given a valid ring, here is
-a slot inside the buffer, and a valid ring again*. The parameters cannot
-change, being integers passed by value, so the new state comes back as
-results.
+Every operation has the same contract, in outline: *give me a valid ring, and
+I'll give you a slot inside the buffer and a valid ring back*. The parameters
+are integers passed by value, so they can't change, and the new state comes
+back as results.
 
 ```go
 //@ Requires Ring(head, size, room) ^ size < room
@@ -17498,9 +17517,9 @@ func Pop(head, size, room int) (slot, h, s int) {
 //@ Ensures 0 <= slot < room ^ Ring(h, s, room) ^ s = size - 1
 ```
 
-`size < room` and `size > 0` are the two ways to misuse a queue, and they are
-now the caller's problem, in writing. A caller that is itself verified has to
-prove them:
+`size < room` and `size > 0` are the two ways to misuse a queue (push onto a
+full one, pop from an empty one). Now they are the caller's problem, in
+writing. A caller that is verified too has to prove them:
 
 ```go
 //@ Requires Ring(head, size, room) ^ size < room
@@ -17513,9 +17532,9 @@ func PushThenPop(head, size, room int) (h, s int) {
 ```
 
 `Pop` is legal there because `Push` promised `s = size + 1`, which is more
-than zero. Take that out of `Push`'s contract and this function stops
-verifying, though `Push` itself still does: a contract is everything a caller
-gets to know.
+than zero. Delete that promise from `Push`'s contract and this function stops
+verifying, even though `Push` itself still does. A contract is everything a
+caller gets to know.
 
 ## Running it
 
@@ -17554,11 +17573,13 @@ func main() {
 
 ## Things to break
 
-* In `Parent`, return `i / 2`. `Left` still verifies. `Right` does not, nor
-  does `Parent` itself, nor `LargerChild`: the tree has lost its right
+A proof you've never seen fail is hard to trust. So go break things:
+
+* In `Parent`, return `i / 2`. `Left` still verifies. `Right` doesn't, and
+  neither does `Parent` itself, or `LargerChild`. The tree has lost its right
   children, and everything that relied on them says so.
-* In `Depth`, climb with `j = j - 1`. It still ends, and the invariant is not
-  maintained, because the node before `j` is no relation of it.
+* In `Depth`, climb with `j = j - 1`. It still ends, but the invariant breaks,
+  because the node before `j` is no relation of it.
 * In `LargerChild`, test `A[Right(i)] > A[c]` first. The index is no longer
   known to be in range.
 * In `Push`, drop the `% room`. The slot escapes the buffer.
@@ -17566,24 +17587,24 @@ func main() {
 
 # Publishing
 
-The last two files aren't part of litgo. They are what GitHub does with it
-after a push: one publishes this document as a web page, the other publishes
-the binaries.
+The last two files aren't part of litgo. They're what GitHub does with litgo
+after a push. One publishes this document as a web page, and the other
+publishes the binaries.
 
 <!-- file: .github/workflows/pages.yml -->
 
 This document is also the project's web page. Every push to `master` builds
 litgo from the committed sources, weaves this file to HTML with the binary it
 just built, and publishes the result to GitHub Pages. The examples go up beside
-it: every `examples/*.lit.md` becomes `examples/<name>.html` under the same
-site, so [worker_pool](examples/worker_pool.html), [isqrt](examples/isqrt.html),
+it. Every `examples/*.lit.md` becomes `examples/<name>.html` on the same site,
+so [worker_pool](examples/worker_pool.html), [isqrt](examples/isqrt.html),
 [vego-tutorial](examples/vego-tutorial.html) and [heap](examples/heap.html) can
-be read without cloning anything, and a new example is published the moment it
-is committed. The tests run first, so a push that breaks litgo doesn't replace
-a page that works, and so do the proofs, of this document and of the examples.
-The HTML needs only pandoc, because the browser runs mermaid.js and KaTeX for
-itself. pandoc is pinned to a release, since what Ubuntu packages is years
-older and the page should look the way it does when woven at home.
+be read without cloning anything, and a new example goes live the moment it's
+committed. The tests run first, and so do the proofs (of this document and of
+the examples), so a push that breaks litgo never replaces a page that works.
+The HTML needs only pandoc, because the browser runs mermaid.js and KaTeX
+itself. pandoc is pinned to a release, since the one Ubuntu packages is years
+older, and the page should look the way it does when woven at home.
 
 ```yaml
 name: pages
@@ -17649,12 +17670,16 @@ jobs:
 <!-- file: .github/workflows/release.yml -->
 
 Releases follow the `VERSION` constant in the command. Every push to `master`
-reads it, and if no release is tagged `v` plus that version yet, the push
-becomes that release. So publishing a version is changing one string, and a
-push that leaves the string alone publishes nothing. litgo depends on nothing
-but the standard library, which makes cross-compiling a matter of setting two
-variables, and one Linux machine builds for all four targets. The tests run
-first here too.
+reads it, and if nothing is tagged `v` plus that version yet, the push becomes
+that release. Publishing a version means changing one string. A push that
+leaves the string alone publishes nothing. Because litgo depends on nothing but
+the standard library, cross-compiling is a matter of setting two variables, and
+one Linux machine builds for all four targets. The tests run first here too.
+
+This is the last block. Tangle the document it sits in and you get litgo. Run
+that litgo on this document and you get it all back, byte for byte, including
+this block. The snake eats its tail one more time and comes out the same
+length.
 
 ```yaml
 name: release

@@ -5,9 +5,9 @@
 
 # Worker pool in Go
 
-A pool of $n$ workers processes $m$ jobs concurrently. The jobs travel through
-a channel, and the context is cancellable, so we can stop early and still keep
-the partial results.
+Three workers, ten jobs, one deadline. A pool of $n$ workers chews through $m$
+jobs at the same time. The jobs travel through a channel, and the context can
+be cancelled, so we can stop early and still keep whatever already finished.
 
 If every job costs $t$ seconds, the pool finishes in about
 
@@ -15,8 +15,8 @@ $$
 T(n, m) = \left\lceil \frac{m}{n} \right\rceil \cdot t
 $$
 
-instead of the $m \cdot t$ a single goroutine would need: a speed-up of
-$\frac{m t}{T} \approx n$ for as long as $n \le m$.
+instead of the $m \cdot t$ one goroutine would need. That's a speed-up of
+$\frac{m t}{T} \approx n$, for as long as $n \le m$.
 
 ```mermaid
 flowchart LR
@@ -26,9 +26,9 @@ flowchart LR
 
 ## The shape of the program
 
-The whole program fits on one screen, because each step is a named chunk that
-is explained further down. Chunks are spliced in *textually*, so they see
-`ctx`, `jobs`, `results` and `wg` exactly as if they had been written here.
+The whole program fits on one screen, because every step is a named chunk
+explained further down. Chunks are spliced in *textually*, so they see `ctx`,
+`jobs`, `results` and `wg` exactly as if they'd been written right here.
 
 ```go
 // <<the worker>>
@@ -51,7 +51,8 @@ func main() {
 ## The worker
 
 A worker drains `jobs` until the channel closes or the context is cancelled,
-whichever comes first. Doubling stands in for real work.
+whichever comes first. Doubling a number stands in for real work. This worker
+is overpaid.
 
 <!-- chunk: the worker -->
 ```go
@@ -81,7 +82,8 @@ sequenceDiagram
 
 ## Cancellation
 
-The deadline is a tiny chunk of its own: an expression, interpolated inline.
+The deadline is a tiny chunk of its own, an expression spliced into the middle
+of a line.
 
 <!-- chunk: set up a cancellable context -->
 ```go
@@ -90,7 +92,8 @@ defer cancel()
 time.AfterFunc(/*<<the deadline>>*/, cancel)
 ```
 
-Long enough for roughly half of the jobs.
+Fifty milliseconds. Long enough for roughly half the jobs, so you get to watch
+the cancellation actually cut something off.
 
 <!-- chunk: the deadline -->
 ```go
@@ -107,7 +110,7 @@ for i := 0; i < n; i++ {
 }
 ```
 
-The channel is buffered with room for all $m$ jobs, so feeding never blocks.
+The channel has room for all $m$ jobs, so feeding it never blocks.
 
 <!-- chunk: feed the jobs -->
 ```go
@@ -125,8 +128,8 @@ go func() {
 }()
 ```
 
-Ranging over `results` ends when the channel closes, which happens after the
-last worker returns — whether it ran out of jobs or was cancelled.
+Ranging over `results` ends when the channel closes, and that happens after the
+last worker returns, whether it ran out of jobs or got cancelled.
 
 <!-- chunk: collect the results -->
 ```go
