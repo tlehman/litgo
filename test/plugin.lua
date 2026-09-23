@@ -401,5 +401,18 @@ vim.cmd("Prove")
 wait(10000, function() return vim.g.litgo_last_proof ~= nil end, ":Prove")
 check(vim.g.litgo_last_proof == "1/1", ":Prove proves it without running it")
 
+-- A new file starts as a program that runs ------------------------------------
+vim.cmd.edit(dir .. "/hello.lit.md")
+local nbuf = vim.api.nvim_get_current_buf()
+check(find(nbuf, "# hello") ~= nil, "a new file is titled after its name")
+check(find(nbuf, "<!-- imports: fmt -->") ~= nil, "and has the directives")
+check(find(nbuf, "func main() {") ~= nil, "and a main")
+vim.wait(3000, function() return false end, 20)
+check(#vim.diagnostic.get(nbuf) == 0, "and no diagnostics")
+local kept = vim.fn.tempname() .. ".lit.md"
+vim.fn.writefile({ "# kept" }, kept)
+vim.cmd.edit(kept)
+check(#vim.api.nvim_buf_get_lines(0, 0, -1, false) == 1, "a file with something in it is left alone")
+
 print(failures == 0 and "\nall passed" or ("\n" .. failures .. " failed"))
 os.exit(failures == 0 and 0 or 1)

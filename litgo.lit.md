@@ -11332,7 +11332,7 @@ Editor protocol (document on stdin, JSON on stdout):
 Positions in the editor protocol are 0-based; columns are bytes.
 `
 
-const VERSION = "0.2.2"
+const VERSION = "0.2.3"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -14608,6 +14608,7 @@ M.config = {
     -- completion plugin is loaded. true forces it on, false off.
   },
   weave = { open = true },
+  scaffold = true, -- fill a new, empty .lit.md with a program that already runs
   untangle = { jump = false }, -- true: go to the new chunk to document it right away
   keymaps = {
     run = "<localleader>r",
@@ -14770,6 +14771,40 @@ function M.in_go_block(buf, line)
 end
 ```
 
+A new file starts out as an empty buffer, and an empty buffer is not a
+literate program: there are no Go blocks, so there is nothing to tangle, and
+the language server says so on line 1 before a word has been typed. Rather
+than greet a new file with a warning, the plugin fills it with the smallest
+program that runs. The three directives at the top say which tangler to use,
+which package the code goes in and what it imports; the title comes from the
+file name, so `foo.lit.md` is `# foo`. Only an empty buffer gets this,
+whether the file is new or was made with `touch`, so nothing is ever
+overwritten.
+
+```lua
+--- Fill an empty .lit.md buffer with a program that runs.
+local function scaffold(buf)
+  if vim.api.nvim_buf_line_count(buf) > 1 or vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1] ~= "" then
+    return
+  end
+  local name = vim.api.nvim_buf_get_name(buf)
+  local title = vim.fn.fnamemodify(name, ":t"):gsub("%.lit%.md$", "")
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
+    "<!-- tangler: go -->",
+    "<!-- package: main -->",
+    "<!-- imports: fmt -->",
+    "",
+    "# " .. title,
+    "",
+    "```go",
+    "func main() {",
+    '\tfmt.Println("Hello from ' .. title .. '!")',
+    "}",
+    "```",
+  })
+end
+```
+
 The filetype stays `markdown`, so treesitter highlighting and everything else
 that works for Markdown keeps working. The commands are local to the buffer.
 
@@ -14780,6 +14815,9 @@ function M.attach(buf)
     return
   end
   vim.b[buf].litgo_attached = true
+  if M.config.scaffold then
+    scaffold(buf)
+  end
 
   local run = require("litgo.run")
   local chunks = require("litgo.chunks")
@@ -16491,6 +16529,19 @@ vim.cmd("Prove")
 wait(10000, function() return vim.g.litgo_last_proof ~= nil end, ":Prove")
 check(vim.g.litgo_last_proof == "1/1", ":Prove proves it without running it")
 
+-- A new file starts as a program that runs ------------------------------------
+vim.cmd.edit(dir .. "/hello.lit.md")
+local nbuf = vim.api.nvim_get_current_buf()
+check(find(nbuf, "# hello") ~= nil, "a new file is titled after its name")
+check(find(nbuf, "<!-- imports: fmt -->") ~= nil, "and has the directives")
+check(find(nbuf, "func main() {") ~= nil, "and a main")
+vim.wait(3000, function() return false end, 20)
+check(#vim.diagnostic.get(nbuf) == 0, "and no diagnostics")
+local kept = vim.fn.tempname() .. ".lit.md"
+vim.fn.writefile({ "# kept" }, kept)
+vim.cmd.edit(kept)
+check(#vim.api.nvim_buf_get_lines(0, 0, -1, false) == 1, "a file with something in it is left alone")
+
 print(failures == 0 and "\nall passed" or ("\n" .. failures .. " failed"))
 os.exit(failures == 0 and 0 or 1)
 ```
@@ -17741,4 +17792,15 @@ jobs:
         run: |
           gh release create ${{ steps.version.outputs.tag }} dist/* \
             --target "$GITHUB_SHA" --title ${{ steps.version.outputs.tag }} --generate-notes
+```
+<!-- tangler: go -->
+<!-- package: main -->
+<!-- imports: fmt -->
+
+# litgo
+
+```go
+func main() {
+	fmt.Println("Hello from litgo!")
+}
 ```

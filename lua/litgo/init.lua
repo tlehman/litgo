@@ -38,6 +38,7 @@ M.config = {
     -- completion plugin is loaded. true forces it on, false off.
   },
   weave = { open = true },
+  scaffold = true, -- fill a new, empty .lit.md with a program that already runs
   untangle = { jump = false }, -- true: go to the new chunk to document it right away
   keymaps = {
     run = "<localleader>r",
@@ -165,12 +166,37 @@ function M.in_go_block(buf, line)
   return lang == "go"
 end
 
+--- Fill an empty .lit.md buffer with a program that runs.
+local function scaffold(buf)
+  if vim.api.nvim_buf_line_count(buf) > 1 or vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1] ~= "" then
+    return
+  end
+  local name = vim.api.nvim_buf_get_name(buf)
+  local title = vim.fn.fnamemodify(name, ":t"):gsub("%.lit%.md$", "")
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
+    "<!-- tangler: go -->",
+    "<!-- package: main -->",
+    "<!-- imports: fmt -->",
+    "",
+    "# " .. title,
+    "",
+    "```go",
+    "func main() {",
+    '\tfmt.Println("Hello from ' .. title .. '!")',
+    "}",
+    "```",
+  })
+end
+
 --- Set up one .lit.md buffer: commands, keymaps, rendering.
 function M.attach(buf)
   if vim.b[buf].litgo_attached or not M.is_lit(buf) then
     return
   end
   vim.b[buf].litgo_attached = true
+  if M.config.scaffold then
+    scaffold(buf)
+  end
 
   local run = require("litgo.run")
   local chunks = require("litgo.chunks")
